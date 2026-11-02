@@ -7,7 +7,7 @@ import pg from "pg";
 import { CATEGORIES, categorize, isWeekendIso } from "./parse.js";
 
 const pool = new pg.Pool({
-  connectionString: process.env.DATABASE_URL || "postgres://finance:finance@127.0.0.1:5433/finance",
+  connectionString: process.env.DATABASE_URL || "postgres://finance:finance@127.0.0.1:5555/finance",
 });
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));

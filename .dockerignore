@@ -4,5 +4,11 @@ client/dist
 .git
 .sprite
 **/.sprite
+.agents
+.neon
+.env
+.env.*
 *.md
 .cursor
+fly.toml
+agent-transcripts
