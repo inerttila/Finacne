@@ -1,11 +1,19 @@
 import cors from "cors";
 import express from "express";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import pg from "pg";
 import { CATEGORIES, categorize, isWeekendIso } from "./parse.js";
 
 const pool = new pg.Pool({
   connectionString: process.env.DATABASE_URL || "postgres://finance:finance@127.0.0.1:5433/finance",
 });
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const clientDist = path.resolve(__dirname, "../../client/dist");
+const port = Number(process.env.PORT) || 3001;
+const host = process.env.HOST || "127.0.0.1";
 
 const app = express();
 app.use(cors());
@@ -498,6 +506,13 @@ app.delete("/api/transactions/:id", async (req, res, next) => {
   }
 });
 
+if (fs.existsSync(clientDist)) {
+  app.use(express.static(clientDist));
+  app.get(/^(?!\/api).*/, (_req, res) => {
+    res.sendFile(path.join(clientDist, "index.html"));
+  });
+}
+
 app.use((error, _req, res, _next) => {
   const status = error.status || 500;
   if (status >= 500) console.error(error);
@@ -519,8 +534,8 @@ async function waitForDb() {
 async function main() {
   await waitForDb();
   await migrate();
-  app.listen(3001, "127.0.0.1", () => {
-    console.log("API on http://127.0.0.1:3001");
+  app.listen(port, host, () => {
+    console.log(`API on http://${host}:${port}`);
   });
 }
 
