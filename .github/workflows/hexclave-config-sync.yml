@@ -1,0 +1,52 @@
+name: Hexclave Config Sync
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - "main"
+    paths:
+      - "hexclave.config.ts"
+      - ".github/workflows/hexclave-config-sync.yml"
+
+jobs:
+  push-hexclave-config:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      # Install the repo's dependencies so the config file's SDK import (e.g.
+      # `@hexclave/js`) — and any other package it imports — resolves when the
+      # CLI evaluates it. The package manager is detected from the lockfile.
+      - name: Install dependencies
+        run: |
+          if [ -f pnpm-lock.yaml ]; then
+            corepack enable
+            pnpm install --frozen-lockfile
+          elif [ -f yarn.lock ]; then
+            corepack enable
+            yarn install --immutable
+          elif [ -f bun.lockb ] || [ -f bun.lock ]; then
+            npm install -g bun
+            bun install --frozen-lockfile
+          elif [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
+            npm ci
+          elif [ -f package.json ]; then
+            npm install
+          else
+            echo "No package.json found at the repository root; skipping dependency install."
+          fi
+      - name: Push Hexclave config
+        env:
+          HEXCLAVE_PROJECT_ID: ${{ secrets.HEXCLAVE_PROJECT_ID }}
+          HEXCLAVE_SECRET_SERVER_KEY: ${{ secrets.HEXCLAVE_SECRET_SERVER_KEY }}
+          HEXCLAVE_CONFIG_PATH: "hexclave.config.ts"
+          HEXCLAVE_SOURCE_REPO: ${{ github.repository }}
+          HEXCLAVE_SOURCE_WORKFLOW_PATH: ".github/workflows/hexclave-config-sync.yml"
+        run: npx --yes @hexclave/cli@latest config push --config-file "$HEXCLAVE_CONFIG_PATH" --source github --source-repo "$HEXCLAVE_SOURCE_REPO" --source-path "$HEXCLAVE_CONFIG_PATH" --source-workflow-path "$HEXCLAVE_SOURCE_WORKFLOW_PATH"
