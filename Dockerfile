@@ -6,6 +6,8 @@ COPY server/package.json ./server/
 RUN npm ci
 COPY client ./client
 COPY server ./server
+ARG VITE_HEXCLAVE_PROJECT_ID
+ENV VITE_HEXCLAVE_PROJECT_ID=$VITE_HEXCLAVE_PROJECT_ID
 RUN npm run build -w client
 RUN npm prune --omit=dev
 

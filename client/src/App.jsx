@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useHexclaveApp, useUser } from "@hexclave/react";
 import {
   createCategory,
   createTransaction,
@@ -7,8 +8,8 @@ import {
   deleteTransaction,
   getBootstrap,
   getCategoryDefaults,
+  getSession,
   getStoredUserId,
-  listUsers,
   openNextMonth,
   renameCategory,
   saveIncome,
@@ -47,6 +48,8 @@ function avatarColor(id) {
 }
 
 export default function App() {
+  const hexclave = useHexclaveApp();
+  const authUser = useUser();
   const [users, setUsers] = useState(null);
   const [userId, setUserId] = useState(() => getStoredUserId());
   const [screen, setScreen] = useState("boot");
@@ -64,6 +67,7 @@ export default function App() {
   const [loadId, setLoadId] = useState(0);
   const [welcomeName, setWelcomeName] = useState("");
   const [pageLoading, setPageLoading] = useState(true);
+  const [authBusy, setAuthBusy] = useState(false);
 
   const currentUser =
     users?.find((user) => user.id === userId) || data?.user || null;
@@ -77,27 +81,32 @@ export default function App() {
   }, [screen, currentUser?.name]);
 
   useEffect(() => {
+    if (!authUser) {
+      setUsers(null);
+      setUserId(null);
+      setStoredUserId(null);
+      setData(null);
+      setMonth("");
+      setScreen("auth");
+      setPageLoading(false);
+      return undefined;
+    }
+
     let cancelled = false;
     setPageLoading(true);
-    listUsers()
+    getSession()
       .then((payload) => {
         if (cancelled) return;
-        const nextUsers = payload.users || [];
-        setUsers(nextUsers);
-        const stored = getStoredUserId();
-        const storedOk = stored && nextUsers.some((user) => user.id === stored);
-        if (storedOk) {
-          setUserId(stored);
+        const ledgerUser = payload.user || null;
+        setUsers(ledgerUser ? [ledgerUser] : []);
+        if (ledgerUser) {
+          setStoredUserId(ledgerUser.id);
+          setUserId(ledgerUser.id);
           setScreen("app");
-        } else if (nextUsers.length === 0) {
-          setStoredUserId(null);
-          setUserId(null);
-          setScreen("start");
-          setPageLoading(false);
         } else {
           setStoredUserId(null);
           setUserId(null);
-          setScreen("pick");
+          setScreen("start");
           setPageLoading(false);
         }
       })
@@ -111,7 +120,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [authUser?.id]);
 
   const dataRef = useRef(data);
   dataRef.current = data;
@@ -154,10 +163,10 @@ export default function App() {
       .catch((err) => {
         if (cancelled) return;
         setError(err.message);
-        if (/pick a user|user is gone/i.test(err.message)) {
+        if (/sign in|create your ledger|user is gone/i.test(err.message)) {
           setStoredUserId(null);
           setUserId(null);
-          setScreen(users?.length ? "pick" : "start");
+          setScreen(/sign in/i.test(err.message) ? "auth" : "start");
         }
       })
       .finally(() => {
@@ -178,21 +187,6 @@ export default function App() {
     if (payload.month !== month) setMonth(payload.month);
   }
 
-  function selectUser(id) {
-    setStoredUserId(id);
-    setUserId(id);
-    setMonth("");
-    setData(null);
-    setAddTarget(null);
-    setEditingId(null);
-    clearFilters();
-    setUserMenuOpen(false);
-    setSettingsOpen(false);
-    setError("");
-    setScreen("app");
-    setLoadId((value) => value + 1);
-  }
-
   async function onCreateUser(name, net, categories) {
     const payload = await createUser(name, net, categories);
     setUsers(payload.users);
@@ -204,6 +198,62 @@ export default function App() {
     setError("");
     setWelcomeName(payload.user.name);
     setScreen("hello");
+  }
+
+  async function onSignIn() {
+    setAuthBusy(true);
+    setError("");
+    try {
+      await hexclave.redirectToSignIn();
+    } catch (err) {
+      setError(err.humanReadableMessage || err.message || "Could not open sign in.");
+      setAuthBusy(false);
+    }
+  }
+
+  async function onSignUp() {
+    setAuthBusy(true);
+    setError("");
+    try {
+      await hexclave.redirectToSignUp();
+    } catch (err) {
+      setError(err.humanReadableMessage || err.message || "Could not open sign up.");
+      setAuthBusy(false);
+    }
+  }
+
+  async function onSignOut() {
+    setAuthBusy(true);
+    setError("");
+    try {
+      await authUser.signOut();
+      setStoredUserId(null);
+      setUserId(null);
+      setUsers(null);
+      setData(null);
+      setMonth("");
+      setUserMenuOpen(false);
+      setSettingsOpen(false);
+      setScreen("auth");
+    } catch (err) {
+      setError(err.humanReadableMessage || err.message || "Could not sign out.");
+    } finally {
+      setAuthBusy(false);
+    }
+  }
+
+  async function onAccountSettings() {
+    setAuthBusy(true);
+    setError("");
+    setUserMenuOpen(false);
+    try {
+      await hexclave.redirectToAccountSettings();
+    } catch (err) {
+      setError(
+        err.humanReadableMessage || err.message || "Could not open account settings.",
+      );
+      setAuthBusy(false);
+    }
   }
 
   function finishWelcome() {
@@ -340,8 +390,27 @@ export default function App() {
     return (
       <div className="boot-screen">
         <LoadingBar active />
-        <p className="boot-title">Net</p>
-        <p className="boot-copy">Opening…</p>
+        <p className="eyebrow boot-eyebrow">Net</p>
+        <p className="boot-title">Opening your ledger</p>
+        <p className="boot-copy">One moment…</p>
+      </div>
+    );
+  }
+
+  if (screen === "auth") {
+    return (
+      <div className="page">
+        <LoadingBar active={pageLoading || authBusy} />
+        {error && (
+          <p className="banner" role="alert">
+            {error}
+          </p>
+        )}
+        <AuthGate
+          busy={authBusy}
+          onSignIn={onSignIn}
+          onSignUp={onSignUp}
+        />
       </div>
     );
   }
@@ -365,33 +434,14 @@ export default function App() {
         )}
         <StartPage
           mode={screen === "create" ? "create" : "start"}
+          defaultName={authUser?.displayName || ""}
           onCancel={
-            screen === "create" && users?.length
-              ? () => setScreen(userId ? "app" : "pick")
+            screen === "create"
+              ? () => setScreen(userId ? "app" : "start")
               : null
           }
           onCreated={onCreateUser}
-        />
-      </div>
-    );
-  }
-
-  if (screen === "pick") {
-    return (
-      <div className="page">
-        <LoadingBar active={pageLoading} />
-        {error && (
-          <p className="banner" role="alert">
-            {error}
-          </p>
-        )}
-        <PickUser
-          users={users || []}
-          onPick={selectUser}
-          onCreate={() => {
-            setError("");
-            setScreen("create");
-          }}
+          onSignOut={onSignOut}
         />
       </div>
     );
@@ -401,8 +451,9 @@ export default function App() {
     return (
       <div className="boot-screen">
         <LoadingBar active />
-        <p className="boot-title">Net</p>
-        <p className="boot-copy">Reading the ledger…</p>
+        <p className="eyebrow boot-eyebrow">Net</p>
+        <p className="boot-title">Reading your ledger</p>
+        <p className="boot-copy">Pulling this month…</p>
       </div>
     );
   }
@@ -415,16 +466,17 @@ export default function App() {
           {currentUser && (
             <UserMenu
               user={currentUser}
-              users={users || []}
+              authLabel={authUser?.primaryEmail || authUser?.displayName || ""}
               open={userMenuOpen}
+              busy={authBusy}
               onToggle={() => setUserMenuOpen((value) => !value)}
               onClose={() => setUserMenuOpen(false)}
-              onPick={selectUser}
-              onCreate={() => {
+              onAccountSettings={onAccountSettings}
+              onLedgerSettings={() => {
                 setUserMenuOpen(false);
-                setError("");
-                setScreen("create");
+                setSettingsOpen(true);
               }}
+              onSignOut={onSignOut}
             />
           )}
           <div className="brand">
@@ -448,19 +500,6 @@ export default function App() {
               </svg>
             </button>
           )}
-          <button
-            type="button"
-            className="icon-btn"
-            aria-label="Settings"
-            onClick={() => setSettingsOpen(true)}
-          >
-            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
-              <path
-                fill="currentColor"
-                d="M19.14 12.94c.04-.31.06-.63.06-.94s-.02-.63-.06-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.2 7.2 0 0 0-1.63-.94l-.36-2.54a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.5.42l-.36 2.54c-.59.22-1.13.54-1.63.94l-2.39-.96a.5.5 0 0 0-.6.22L2.71 8.84a.5.5 0 0 0 .12.64l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32c.13.23.4.32.64.22l2.39-.96c.5.4 1.04.72 1.63.94l.36 2.54c.05.24.26.42.5.42h3.84c.24 0 .45-.18.5-.42l.36-2.54c.59-.22 1.13-.54 1.63-.94l2.39.96c.23.1.51 0 .64-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58zM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7z"
-              />
-            </svg>
-          </button>
           <p className="month-label">
             {data
               ? formatMonth(data.month)
@@ -762,9 +801,9 @@ export default function App() {
             applyPayload(payload);
             setError("");
           }}
-          onDeleted={(nextUsers) => {
+          onDeleted={async () => {
             setSettingsOpen(false);
-            setUsers(nextUsers);
+            setUsers([]);
             setStoredUserId(null);
             setUserId(null);
             setMonth("");
@@ -773,7 +812,7 @@ export default function App() {
             setEditingId(null);
             clearFilters();
             setError("");
-            setScreen(nextUsers.length ? "pick" : "start");
+            await onSignOut();
           }}
           onError={setError}
         />
@@ -956,15 +995,82 @@ function HelloScreen({ name, onDone }) {
   );
 }
 
-function StartPage({ mode, onCreated, onCancel }) {
+const AUTH_ROTATE_WORDS = ["ledger", "spending", "month"];
+
+function AuthGate({ busy, onSignIn, onSignUp }) {
+  const [wordIndex, setWordIndex] = useState(0);
+
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      setWordIndex((value) => (value + 1) % AUTH_ROTATE_WORDS.length);
+    }, 2800);
+    return () => window.clearInterval(id);
+  }, []);
+
+  const rotateWord = AUTH_ROTATE_WORDS[wordIndex];
+
+  return (
+    <section className="start-flow auth-gate">
+      <div className="auth-gate-inner">
+        <p className="eyebrow auth-gate-eyebrow">Net</p>
+        <h1 className="auth-title">
+          <span className="auth-title-line">
+            {"Sign in to your".split(" ").map((word, index) => (
+              <span
+                key={word}
+                className="auth-word"
+                style={{ animationDelay: `${120 + index * 90}ms` }}
+              >
+                {word}
+              </span>
+            ))}
+          </span>
+          <span className="auth-title-line auth-title-rotate-line">
+            <span className="auth-rotate" key={rotateWord}>
+              {rotateWord}
+            </span>
+          </span>
+        </h1>
+        <p className="hint auth-gate-copy">
+          Create an account or sign in with email, Google, or GitHub. Your
+          spending stays private to you.
+        </p>
+        <div className="editor-actions auth-gate-actions">
+          <button
+            type="button"
+            className="btn primary"
+            disabled={busy}
+            onClick={onSignIn}
+          >
+            {busy ? "Opening…" : "Sign in"}
+          </button>
+          <button
+            type="button"
+            className="btn"
+            disabled={busy}
+            onClick={onSignUp}
+          >
+            Create account
+          </button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function StartPage({ mode, defaultName = "", onCreated, onCancel, onSignOut }) {
   const [step, setStep] = useState(0);
   const [dir, setDir] = useState(1);
-  const [name, setName] = useState("");
+  const [name, setName] = useState(defaultName);
   const [net, setNet] = useState("");
   const [categories, setCategories] = useState([]);
   const [adding, setAdding] = useState("");
   const [saving, setSaving] = useState(false);
   const [localError, setLocalError] = useState("");
+
+  useEffect(() => {
+    if (defaultName && !name) setName(defaultName);
+  }, [defaultName]);
 
   useEffect(() => {
     getCategoryDefaults()
@@ -1071,11 +1177,9 @@ function StartPage({ mode, onCreated, onCancel }) {
 
   const titles = ["Your name", "Your net", "Your categories"];
   const hints = [
-    mode === "create"
-      ? "Add another person to the ledger."
-      : "This is how you’ll show up on the account.",
+    "This is how you’ll show up on your ledger.",
     "How much net do you start this month with?",
-    "These start as the defaults. Rename any, or add your own. They’re only for this user.",
+    "These start as the defaults. Rename any, or add your own.",
   ];
 
   return (
@@ -1090,7 +1194,7 @@ function StartPage({ mode, onCreated, onCancel }) {
         className={dir >= 0 ? "start-step in-right" : "start-step in-left"}
       >
         <p className="eyebrow">
-          {mode === "create" ? "New user" : "Add your account"}
+          {mode === "create" ? "Set up ledger" : "Welcome"}
         </p>
         <h1>{titles[step]}</h1>
         <p className="hint">{hints[step]}</p>
@@ -1118,6 +1222,11 @@ function StartPage({ mode, onCreated, onCancel }) {
               {onCancel && (
                 <button className="btn" type="button" onClick={onCancel}>
                   Cancel
+                </button>
+              )}
+              {onSignOut && (
+                <button className="btn" type="button" onClick={onSignOut}>
+                  Sign out
                 </button>
               )}
             </div>
@@ -1203,93 +1312,110 @@ function StartPage({ mode, onCreated, onCancel }) {
   );
 }
 
-function PickUser({ users, onPick, onCreate }) {
-  return (
-    <section className="start-flow">
-      <div className="start-step in-right">
-        <p className="eyebrow">Who is this</p>
-        <h1>Pick a user</h1>
-        <p className="hint">Each person keeps their own net and lines.</p>
-        <div className="user-pick-list">
-          {users.map((user) => (
-            <button
-              key={user.id}
-              type="button"
-              className="user-pick"
-              onClick={() => onPick(user.id)}
-            >
-              <span
-                className="avatar"
-                style={{ background: avatarColor(user.id) }}
-              >
-                {user.initial}
-              </span>
-              <span>{user.name}</span>
-            </button>
-          ))}
-        </div>
-        <div className="pick-create">
-          <p className="hint">Someone new?</p>
-          <button type="button" className="btn primary" onClick={onCreate}>
-            Create user
-          </button>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function UserMenu({ user, users, open, onToggle, onClose, onPick, onCreate }) {
+function UserMenu({
+  user,
+  authLabel,
+  open,
+  busy,
+  onToggle,
+  onClose,
+  onAccountSettings,
+  onLedgerSettings,
+  onSignOut,
+}) {
   useEffect(() => {
     if (!open) return undefined;
     function onDoc(event) {
       if (!event.target.closest(".user-menu")) onClose();
     }
+    function onKey(event) {
+      if (event.key === "Escape") onClose();
+    }
     document.addEventListener("mousedown", onDoc);
-    return () => document.removeEventListener("mousedown", onDoc);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      window.removeEventListener("keydown", onKey);
+    };
   }, [open, onClose]);
 
+  const color = avatarColor(user.id);
+
   return (
-    <div className="user-menu">
+    <div className={open ? "user-menu open" : "user-menu"}>
       <button
         type="button"
         className="avatar-btn"
         aria-label={`${user.name} account menu`}
         aria-expanded={open}
         onClick={onToggle}
-        style={{ background: avatarColor(user.id) }}
+        style={{ background: color }}
       >
         {user.initial}
       </button>
       {open && (
         <div className="user-menu-panel" role="menu">
-          <p className="user-menu-label">{user.name}</p>
-          {users
-            .filter((item) => item.id !== user.id)
-            .map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                className="user-menu-item"
-                role="menuitem"
-                onClick={() => onPick(item.id)}
-              >
-                <span
-                  className="avatar sm"
-                  style={{ background: avatarColor(item.id) }}
-                >
-                  {item.initial}
-                </span>
-                {item.name}
-              </button>
-            ))}
+          <div className="user-menu-head">
+            <span className="avatar" style={{ background: color }}>
+              {user.initial}
+            </span>
+            <div className="user-menu-meta">
+              <strong>{user.name}</strong>
+              {authLabel ? <span>{authLabel}</span> : null}
+            </div>
+          </div>
+          <div className="user-menu-divider" />
           <button
             type="button"
-            className="user-menu-item create"
+            className="user-menu-item"
             role="menuitem"
-            onClick={onCreate}
+            disabled={busy}
+            onClick={onAccountSettings}
           >
-            Create user
+            <span className="user-menu-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="16" height="16">
+                <path
+                  fill="currentColor"
+                  d="M12 12a4.5 4.5 0 1 0 0-9 4.5 4.5 0 0 0 0 9zm0 2c-4.2 0-8 2.1-8 4.7V21h16v-2.3c0-2.6-3.8-4.7-8-4.7z"
+                />
+              </svg>
+            </span>
+            Account settings
+          </button>
+          <button
+            type="button"
+            className="user-menu-item"
+            role="menuitem"
+            disabled={busy}
+            onClick={onLedgerSettings}
+          >
+            <span className="user-menu-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="16" height="16">
+                <path
+                  fill="currentColor"
+                  d="M19.14 12.94c.04-.31.06-.63.06-.94s-.02-.63-.06-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.2 7.2 0 0 0-1.63-.94l-.36-2.54a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.5.42l-.36 2.54c-.59.22-1.13.54-1.63.94l-2.39-.96a.5.5 0 0 0-.6.22L2.71 8.84a.5.5 0 0 0 .12.64l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32c.13.23.4.32.64.22l2.39-.96c.5.4 1.04.72 1.63.94l.36 2.54c.05.24.26.42.5.42h3.84c.24 0 .45-.18.5-.42l.36-2.54c.59-.22 1.13-.54 1.63-.94l2.39.96c.23.1.51 0 .64-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58zM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7z"
+                />
+              </svg>
+            </span>
+            Ledger settings
+          </button>
+          <div className="user-menu-divider" />
+          <button
+            type="button"
+            className="user-menu-item danger"
+            role="menuitem"
+            disabled={busy}
+            onClick={onSignOut}
+          >
+            <span className="user-menu-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="16" height="16">
+                <path
+                  fill="currentColor"
+                  d="M10 4v2h8v12h-8v2h10V4H10zm-1.3 5.3L6.4 12l2.3 2.7-1.4 1.2L3.6 12l3.7-3.9 1.4 1.2z"
+                />
+              </svg>
+            </span>
+            {busy ? "Signing out…" : "Sign out"}
           </button>
         </div>
       )}
@@ -1527,13 +1653,21 @@ function Hero({ data, onSaved, onError }) {
   return (
     <section className="hero">
       <div>
-        <p className="eyebrow">
+        <p className="eyebrow hero-eyebrow">
           {remaining >= 0 ? "Left" : "Over the net"} · {formatMonth(data.month)}
         </p>
-        <p className={remaining >= 0 ? "figure huge" : "figure huge negative"}>
+        <p
+          className={
+            remaining >= 0
+              ? "figure huge hero-amount"
+              : "figure huge hero-amount negative"
+          }
+        >
           {lek(Math.abs(remaining))}
         </p>
-        <p className="sub">of {lek(data.income)} net · amounts in lek</p>
+        <p className="sub hero-sub">
+          of {lek(data.income)} net · amounts in lek
+        </p>
         {site > 0 && (
           <p className="carry">
             + {lek(site)} <span>site money</span>
@@ -2510,17 +2644,20 @@ function SettingsModal({ user, categories, month, onClose, onSaved, onDeleted, o
             </button>
           </div>
           <div className="settings-danger">
-            <p>
-              Delete the signed-in user{user?.name ? ` (${user.name})` : ""}.
-              This removes their ledger.
-            </p>
+            <div className="settings-danger-copy">
+              <h3>Remove this ledger</h3>
+              <p>
+                Wipe{user?.name ? ` ${user.name}'s` : " this"} net, categories,
+                and every line for good. You’ll land back at sign-in after.
+              </p>
+            </div>
             <button
               className="btn danger"
               type="button"
               disabled={deleting}
               onClick={() => setConfirmDelete(true)}
             >
-              Delete user
+              {deleting ? "Deleting…" : "Delete user"}
             </button>
           </div>
           <div className="editor-actions">

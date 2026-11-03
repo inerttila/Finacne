@@ -3,8 +3,12 @@ export async function ensureSchema(pool) {
     create table if not exists users (
       id serial primary key,
       name text not null,
+      auth_id text unique,
       created_at timestamptz not null default now()
     );
+
+    alter table users add column if not exists auth_id text;
+    create unique index if not exists users_auth_id_unique on users (auth_id);
 
     create table if not exists categories (
       user_id int not null references users(id),

@@ -1,3 +1,5 @@
+import { hexclaveClientApp } from "./hexclave/client.js";
+
 const USER_KEY = "finance-user-id";
 
 let currentUserId = Number(localStorage.getItem(USER_KEY)) || null;
@@ -13,11 +15,12 @@ export function setStoredUserId(id) {
 }
 
 async function request(url, options = {}) {
+  const authorizationHeader = await hexclaveClientApp.getAuthorizationHeader();
   const headers = {
     "Content-Type": "application/json",
     ...(options.headers || {}),
+    ...(authorizationHeader ? { Authorization: authorizationHeader } : {}),
   };
-  if (currentUserId) headers["X-User-Id"] = String(currentUserId);
 
   const response = await fetch(url, {
     ...options,
@@ -35,6 +38,10 @@ async function request(url, options = {}) {
   }
   if (response.status === 204) return null;
   return response.json();
+}
+
+export function getSession() {
+  return request("/api/session");
 }
 
 export function listUsers() {

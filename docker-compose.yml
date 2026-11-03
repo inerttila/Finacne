@@ -19,7 +19,10 @@ services:
     restart: unless-stopped
 
   app:
-    build: .
+    build:
+      context: .
+      args:
+        VITE_HEXCLAVE_PROJECT_ID: ${VITE_HEXCLAVE_PROJECT_ID}
     image: finacne-app:local
     ports:
       - "8080:8080"
@@ -30,6 +33,8 @@ services:
       DATABASE_URL: postgres://finance:finance@db:5432/finance
       HOST: 0.0.0.0
       PORT: "8080"
+      HEXCLAVE_PROJECT_ID: ${HEXCLAVE_PROJECT_ID}
+      HEXCLAVE_SECRET_SERVER_KEY: ${HEXCLAVE_SECRET_SERVER_KEY}
     depends_on:
       db:
         condition: service_healthy

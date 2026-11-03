@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
+import { hexclaveServerApp } from "./hexclave/server.js";
 import { resolveFiscalInvoice } from "./invoice.js";
 import { CATEGORIES, categorize, isWeekendIso } from "./parse.js";
 import { ensureSchema } from "./schema.js";
@@ -184,32 +185,56 @@ function mapUser(row) {
   return {
     id: row.id,
     name: row.name,
+    authId: row.auth_id || null,
     initial: String(row.name || "?").trim().charAt(0).toUpperCase() || "?",
   };
 }
 
+function mapAuthUser(authUser) {
+  return {
+    id: authUser.id,
+    email: authUser.primaryEmail || null,
+    displayName: authUser.displayName || null,
+  };
+}
+
 async function listUsers() {
-  const { rows } = await pool.query("select id, name from users order by id");
+  const { rows } = await pool.query("select id, name, auth_id from users order by id");
   return rows.map(mapUser);
 }
 
 async function getUser(id) {
-  const { rows } = await pool.query("select id, name from users where id = $1", [id]);
+  const { rows } = await pool.query(
+    "select id, name, auth_id from users where id = $1",
+    [id],
+  );
   return rows[0] ? mapUser(rows[0]) : null;
 }
 
-async function resolveUserId(req) {
-  const raw = req.headers["x-user-id"] ?? req.query?.userId ?? req.body?.userId;
-  const id = Number(raw);
-  if (!Number.isInteger(id) || id <= 0) {
-    const error = new Error("Pick a user first.");
+async function getUserByAuthId(authId) {
+  const { rows } = await pool.query(
+    "select id, name, auth_id from users where auth_id = $1",
+    [authId],
+  );
+  return rows[0] ? mapUser(rows[0]) : null;
+}
+
+async function requireAuthUser(req) {
+  const authUser = await hexclaveServerApp.getUser({ tokenStore: req });
+  if (!authUser) {
+    const error = new Error("Sign in to continue.");
     error.status = 401;
     throw error;
   }
-  const user = await getUser(id);
+  return authUser;
+}
+
+async function resolveUserId(req) {
+  const authUser = await requireAuthUser(req);
+  const user = await getUserByAuthId(authUser.id);
   if (!user) {
-    const error = new Error("That user is gone.");
-    error.status = 401;
+    const error = new Error("Create your ledger first.");
+    error.status = 404;
     throw error;
   }
   return user;
@@ -411,9 +436,27 @@ app.get("/api/health", async (_req, res, next) => {
   }
 });
 
-app.get("/api/users", async (_req, res, next) => {
+app.get("/api/session", async (req, res, next) => {
   try {
-    res.json({ users: await listUsers() });
+    const authUser = await requireAuthUser(req);
+    const user = await getUserByAuthId(authUser.id);
+    res.set("Cache-Control", "private, no-store");
+    res.json({
+      auth: mapAuthUser(authUser),
+      user,
+      needsSetup: !user,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/users", async (req, res, next) => {
+  try {
+    const authUser = await requireAuthUser(req);
+    const user = await getUserByAuthId(authUser.id);
+    res.set("Cache-Control", "private, no-store");
+    res.json({ users: user ? [user] : [] });
   } catch (error) {
     next(error);
   }
@@ -425,7 +468,12 @@ app.get("/api/category-defaults", (_req, res) => {
 
 app.post("/api/users", async (req, res, next) => {
   try {
-    const name = String(req.body?.name || "").trim().replace(/\s+/g, " ");
+    const authUser = await requireAuthUser(req);
+    const existing = await getUserByAuthId(authUser.id);
+    if (existing) {
+      return res.status(400).json({ error: "Your ledger already exists." });
+    }
+    const name = String(req.body?.name || authUser.displayName || authUser.primaryEmail || "").trim().replace(/\s+/g, " ");
     const net = Number(String(req.body?.net ?? "").trim().replace(/\s/g, ""));
     if (!name || name.length > 40) {
       return res.status(400).json({ error: "Enter a name." });
@@ -441,8 +489,8 @@ app.post("/api/users", async (req, res, next) => {
     let rows;
     try {
       ({ rows } = await pool.query(
-        "insert into users (name) values ($1) returning id, name",
-        [name],
+        "insert into users (name, auth_id) values ($1, $2) returning id, name, auth_id",
+        [name, authUser.id],
       ));
     } catch (error) {
       if (error.code === "23505") {
@@ -453,9 +501,10 @@ app.post("/api/users", async (req, res, next) => {
     const user = mapUser(rows[0]);
     await seedCategoriesForUser(user.id, setup);
     await ensureIncome(user.id, todayKey(), net);
+    res.set("Cache-Control", "private, no-store");
     res.status(201).json({
       user,
-      users: await listUsers(),
+      users: [user],
       ledger: await loadMonth(user.id),
     });
   } catch (error) {
@@ -480,7 +529,8 @@ app.delete("/api/users/me", async (req, res, next) => {
     } finally {
       client.release();
     }
-    res.json({ users: await listUsers() });
+    res.set("Cache-Control", "private, no-store");
+    res.json({ users: [] });
   } catch (error) {
     next(error);
   }
