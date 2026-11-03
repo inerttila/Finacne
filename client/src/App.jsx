@@ -593,6 +593,16 @@ export default function App() {
                   <strong>{lek(data.weekend)}</strong>
                 </div>
               </div>
+
+              <CategoryPie
+                userId={userId}
+                categories={data.categories}
+                spent={data.spent}
+                active={category}
+                onSelect={(slug) =>
+                  setCategory((current) => (current === slug ? "all" : slug))
+                }
+              />
             </aside>
 
             <section className="ledger">
@@ -649,20 +659,6 @@ export default function App() {
                 </p>
               )}
 
-              {addTarget && (
-                <AddForm
-                  key={`${addTarget}-${data.month}`}
-                  categories={data.categories}
-                  monthKey={addTarget === "past" ? data.month : data.openMonth}
-                  onCancel={() => setAddTarget(null)}
-                  onSaved={(payload) => {
-                    applyPayload(payload);
-                    setAddTarget(null);
-                  }}
-                  onError={setError}
-                />
-              )}
-
               {groups.length === 0 && (
                 <p className="empty">
                   {data.closed
@@ -710,6 +706,20 @@ export default function App() {
         </>
       )}
 
+      {addTarget && data && (
+        <AddExpenseModal
+          key={`${addTarget}-${data.month}`}
+          categories={data.categories}
+          monthKey={addTarget === "past" ? data.month : data.openMonth}
+          onClose={() => setAddTarget(null)}
+          onSaved={(payload) => {
+            applyPayload(payload);
+            setAddTarget(null);
+          }}
+          onError={setError}
+        />
+      )}
+
       {settingsOpen && data && (
         <SettingsModal
           user={currentUser || data.user}
@@ -744,6 +754,141 @@ function shareOf(part, total) {
   const pct = (part / total) * 100;
   if (pct > 0 && pct < 1) return "<1%";
   return `${Math.round(pct)}%`;
+}
+
+function polar(cx, cy, radius, angleDeg) {
+  const radians = ((angleDeg - 90) * Math.PI) / 180;
+  return [cx + radius * Math.cos(radians), cy + radius * Math.sin(radians)];
+}
+
+function pieSlicePath(cx, cy, radius, startAngle, endAngle) {
+  const sweep = endAngle - startAngle;
+  if (sweep >= 359.999) {
+    return `M ${cx} ${cy - radius} A ${radius} ${radius} 0 1 1 ${cx - 0.01} ${cy - radius} Z`;
+  }
+  const [x1, y1] = polar(cx, cy, radius, startAngle);
+  const [x2, y2] = polar(cx, cy, radius, endAngle);
+  return `M ${cx} ${cy} L ${x1} ${y1} A ${radius} ${radius} 0 ${sweep > 180 ? 1 : 0} 1 ${x2} ${y2} Z`;
+}
+
+function pieOpenStorageKey(userId) {
+  return `finance-pie-open:${userId || "anon"}`;
+}
+
+function readPieOpen(userId) {
+  const raw = localStorage.getItem(pieOpenStorageKey(userId));
+  if (raw == null) return true;
+  return raw === "1";
+}
+
+function CategoryPie({ userId, categories, spent, active, onSelect }) {
+  const [open, setOpen] = useState(() => readPieOpen(userId));
+
+  useEffect(() => {
+    setOpen(readPieOpen(userId));
+  }, [userId]);
+
+  const slices = (categories || [])
+    .filter((item) => item.total > 0)
+    .sort((a, b) => b.total - a.total);
+  if (!slices.length || spent <= 0) return null;
+
+  const size = 180;
+  const cx = size / 2;
+  const cy = size / 2;
+  const radius = 78;
+  let angle = 0;
+  const arcs = slices.map((item) => {
+    const portion = item.total / spent;
+    const sweep = portion * 360;
+    const start = angle;
+    const end = angle + sweep;
+    const mid = start + sweep / 2;
+    angle = end;
+    const [lx, ly] = polar(cx, cy, radius * 0.62, mid);
+    return { ...item, start, end, mid, portion, lx, ly, showLabel: portion >= 0.08 };
+  });
+
+  function toggleOpen() {
+    setOpen((prev) => {
+      const next = !prev;
+      localStorage.setItem(pieOpenStorageKey(userId), next ? "1" : "0");
+      return next;
+    });
+  }
+
+  return (
+    <div className={open ? "rail-block category-pie" : "rail-block category-pie folded"}>
+      <button
+        type="button"
+        className="pie-toggle"
+        aria-expanded={open}
+        aria-controls="category-pie-body"
+        onClick={toggleOpen}
+      >
+        <h2>Spending by category</h2>
+        <span className="pie-chevron" aria-hidden="true" />
+      </button>
+      <div className="pie-body" id="category-pie-body">
+        <p className="hint">{"Share of this month's spending."}</p>
+        <svg
+          className="pie-chart"
+          viewBox={`0 0 ${size} ${size}`}
+          role="img"
+          aria-label="Spending by category"
+        >
+          {arcs.map((item) => {
+            const selected = active === item.slug;
+            return (
+              <path
+                key={item.slug}
+                d={pieSlicePath(cx, cy, radius, item.start, item.end)}
+                fill={item.color}
+                className={selected ? "pie-slice on" : "pie-slice"}
+                onClick={() => onSelect(item.slug)}
+              >
+                <title>
+                  {item.name}: {lek(item.total)} ({shareOf(item.total, spent)})
+                </title>
+              </path>
+            );
+          })}
+          {arcs
+            .filter((item) => item.showLabel)
+            .map((item) => (
+              <text
+                key={`${item.slug}-label`}
+                x={item.lx}
+                y={item.ly}
+                className="pie-label"
+                textAnchor="middle"
+                dominantBaseline="middle"
+              >
+                {shareOf(item.total, spent)}
+              </text>
+            ))}
+        </svg>
+        <ul className="pie-legend">
+          {arcs.map((item) => {
+            const selected = active === item.slug;
+            return (
+              <li key={item.slug}>
+                <button
+                  type="button"
+                  className={selected ? "pie-legend-item on" : "pie-legend-item"}
+                  onClick={() => onSelect(item.slug)}
+                >
+                  <span className="swatch" style={{ background: item.color }} />
+                  <span className="pie-legend-name">{item.name}</span>
+                  <span className="pie-legend-pct">{shareOf(item.total, spent)}</span>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      </div>
+    </div>
+  );
 }
 
 function LoadingBar({ active }) {
@@ -1536,6 +1681,52 @@ function MonthList({ data, onOpen }) {
   );
 }
 
+function AddExpenseModal({ categories, monthKey, onClose, onSaved, onError }) {
+  useEffect(() => {
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    function onKey(event) {
+      if (event.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.body.style.overflow = previous;
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [onClose]);
+
+  return (
+    <div className="modal-back add-back" onClick={onClose}>
+      <div
+        className="modal add-sheet"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="add-expense-title"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="add-sheet-head">
+          <h2 id="add-expense-title">Add expense</h2>
+          <button
+            type="button"
+            className="icon-btn"
+            aria-label="Close"
+            onClick={onClose}
+          >
+            ×
+          </button>
+        </div>
+        <AddForm
+          categories={categories}
+          monthKey={monthKey}
+          onCancel={onClose}
+          onSaved={onSaved}
+          onError={onError}
+        />
+      </div>
+    </div>
+  );
+}
+
 function AddForm({ categories, monthKey, onCancel, onSaved, onError }) {
   const bounds = monthDayBounds(monthKey);
   const [amount, setAmount] = useState("");
@@ -1583,7 +1774,7 @@ function AddForm({ categories, monthKey, onCancel, onSaved, onError }) {
   }
 
   return (
-    <form className="editor" onSubmit={onSubmit}>
+    <form className="editor add-form" onSubmit={onSubmit}>
       <p className="hint month-form-note">
         This line is saved in {formatMonth(monthKey)}.
       </p>
@@ -1593,6 +1784,7 @@ function AddForm({ categories, monthKey, onCancel, onSaved, onError }) {
           value={amount}
           inputMode="numeric"
           placeholder="1500"
+          autoFocus
           onChange={(event) => setAmount(event.target.value)}
         />
       </label>
@@ -1702,13 +1894,18 @@ function TransactionRow({
     }
   }
 
-  async function onDelete() {
-    if (!window.confirm(`Delete ${tx.description}?`)) return;
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  async function confirmDeleteTx() {
+    setDeleting(true);
     try {
       onSaved(await deleteTransaction(tx.id));
       onError("");
+      setConfirmDelete(false);
     } catch (err) {
       onError(err.message);
+      setDeleting(false);
     }
   }
 
@@ -1798,13 +1995,83 @@ function TransactionRow({
             <button className="btn primary" type="submit" disabled={saving}>
               {saving ? "Saving…" : "Save"}
             </button>
-            <button className="btn danger" type="button" onClick={onDelete}>
+            <button
+              className="btn danger"
+              type="button"
+              onClick={() => setConfirmDelete(true)}
+            >
               Delete
             </button>
           </div>
         </form>
       )}
+      {confirmDelete && (
+        <ConfirmModal
+          title="Delete line"
+          message={`Delete ${tx.description}? This cannot be undone.`}
+          confirmLabel={deleting ? "Deleting…" : "Delete"}
+          busy={deleting}
+          onConfirm={confirmDeleteTx}
+          onCancel={() => setConfirmDelete(false)}
+        />
+      )}
     </article>
+  );
+}
+
+function ConfirmModal({
+  title,
+  message,
+  confirmLabel = "Delete",
+  cancelLabel = "Cancel",
+  busy = false,
+  onConfirm,
+  onCancel,
+}) {
+  useEffect(() => {
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    function onKey(event) {
+      if (event.key === "Escape" && !busy) onCancel();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.body.style.overflow = previous;
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [busy, onCancel]);
+
+  return (
+    <div className="modal-back confirm-back" onClick={() => !busy && onCancel()}>
+      <div
+        className="modal confirm-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="confirm-title"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <h2 id="confirm-title">{title}</h2>
+        <p>{message}</p>
+        <div className="editor-actions confirm-actions">
+          <button
+            className="btn danger"
+            type="button"
+            disabled={busy}
+            onClick={onConfirm}
+          >
+            {confirmLabel}
+          </button>
+          <button
+            className="btn"
+            type="button"
+            disabled={busy}
+            onClick={onCancel}
+          >
+            {cancelLabel}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -1815,6 +2082,7 @@ function SettingsModal({ user, categories, month, onClose, onSaved, onDeleted, o
   const [adding, setAdding] = useState("");
   const [savingSlug, setSavingSlug] = useState("");
   const [deleting, setDeleting] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   useEffect(() => {
     setDrafts(
@@ -1858,12 +2126,7 @@ function SettingsModal({ user, categories, month, onClose, onSaved, onDeleted, o
     }
   }
 
-  async function onDeleteUser() {
-    const label = user?.name || "this user";
-    const ok = window.confirm(
-      `Delete ${label}? Their net, categories, and lines are removed and cannot be undone.`,
-    );
-    if (!ok) return;
+  async function confirmDeleteUser() {
     setDeleting(true);
     try {
       const payload = await deleteCurrentUser();
@@ -1872,78 +2135,96 @@ function SettingsModal({ user, categories, month, onClose, onSaved, onDeleted, o
     } catch (err) {
       onError(err.message);
       setDeleting(false);
+      setConfirmDelete(false);
     }
   }
 
+  const label = user?.name || "this user";
+
   return (
-    <div className="modal-back" onClick={onClose}>
-      <form
-        className="modal"
-        onClick={(event) => event.stopPropagation()}
-        onSubmit={addCategory}
-      >
-        <h2>Settings</h2>
-        <p>
-          Rename a category, or add one. Fixed payments are marked on the line
-          itself, and they stay out of the average per day.
-        </p>
-        <div className="settings-list">
-          {categories.map((item) => {
-            const dirty = (drafts[item.slug] || "").trim() !== item.name;
-            return (
-              <div className="settings-row" key={item.slug}>
-                <span className="swatch" style={{ background: item.color }} />
-                <input
-                  aria-label={`Name for ${item.name}`}
-                  value={drafts[item.slug] || ""}
-                  onChange={(event) =>
-                    setDrafts({ ...drafts, [item.slug]: event.target.value })
-                  }
-                />
-                <button
-                  className="btn"
-                  type="button"
-                  disabled={!dirty || savingSlug === item.slug}
-                  onClick={() => saveName(item.slug)}
-                >
-                  {savingSlug === item.slug ? "Saving…" : "Save"}
-                </button>
-              </div>
-            );
-          })}
-        </div>
-        <div className="settings-row add-row">
-          <input
-            aria-label="New category"
-            placeholder="New category"
-            value={adding}
-            onChange={(event) => setAdding(event.target.value)}
-          />
-          <button
-            className="btn primary"
-            type="submit"
-            disabled={savingSlug === "new"}
-          >
-            {savingSlug === "new" ? "Adding…" : "Add"}
-          </button>
-        </div>
-        <div className="settings-danger">
-          <p>Delete the signed-in user{user?.name ? ` (${user.name})` : ""}. This removes their ledger.</p>
-          <button
-            className="btn danger"
-            type="button"
-            disabled={deleting}
-            onClick={onDeleteUser}
-          >
-            {deleting ? "Deleting…" : "Delete user"}
-          </button>
-        </div>
-        <div className="editor-actions">
-          <button className="btn" type="button" onClick={onClose}>
-            Close
-          </button>
-        </div>
-      </form>
-    </div>
+    <>
+      <div className="modal-back" onClick={onClose}>
+        <form
+          className="modal"
+          onClick={(event) => event.stopPropagation()}
+          onSubmit={addCategory}
+        >
+          <h2>Settings</h2>
+          <p>
+            Rename a category, or add one. Fixed payments are marked on the line
+            itself, and they stay out of the average per day.
+          </p>
+          <div className="settings-list">
+            {categories.map((item) => {
+              const dirty = (drafts[item.slug] || "").trim() !== item.name;
+              return (
+                <div className="settings-row" key={item.slug}>
+                  <span className="swatch" style={{ background: item.color }} />
+                  <input
+                    aria-label={`Name for ${item.name}`}
+                    value={drafts[item.slug] || ""}
+                    onChange={(event) =>
+                      setDrafts({ ...drafts, [item.slug]: event.target.value })
+                    }
+                  />
+                  <button
+                    className="btn"
+                    type="button"
+                    disabled={!dirty || savingSlug === item.slug}
+                    onClick={() => saveName(item.slug)}
+                  >
+                    {savingSlug === item.slug ? "Saving…" : "Save"}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+          <div className="settings-row add-row">
+            <input
+              aria-label="New category"
+              placeholder="New category"
+              value={adding}
+              onChange={(event) => setAdding(event.target.value)}
+            />
+            <button
+              className="btn primary"
+              type="submit"
+              disabled={savingSlug === "new"}
+            >
+              {savingSlug === "new" ? "Adding…" : "Add"}
+            </button>
+          </div>
+          <div className="settings-danger">
+            <p>
+              Delete the signed-in user{user?.name ? ` (${user.name})` : ""}.
+              This removes their ledger.
+            </p>
+            <button
+              className="btn danger"
+              type="button"
+              disabled={deleting}
+              onClick={() => setConfirmDelete(true)}
+            >
+              Delete user
+            </button>
+          </div>
+          <div className="editor-actions">
+            <button className="btn" type="button" onClick={onClose}>
+              Close
+            </button>
+          </div>
+        </form>
+      </div>
+      {confirmDelete && (
+        <ConfirmModal
+          title="Delete user"
+          message={`Delete ${label}? Their net, categories, and lines are removed and cannot be undone.`}
+          confirmLabel={deleting ? "Deleting…" : "Delete"}
+          busy={deleting}
+          onConfirm={confirmDeleteUser}
+          onCancel={() => setConfirmDelete(false)}
+        />
+      )}
+    </>
   );
 }
