@@ -110,12 +110,33 @@ export default function App() {
     };
   }, []);
 
+  const dataRef = useRef(data);
+  dataRef.current = data;
+  const fetchedLoadIdRef = useRef(-1);
+
   useEffect(() => {
     if (data) setPageLoading(false);
   }, [data]);
 
   useEffect(() => {
     if (screen !== "app" || !userId) return undefined;
+
+    const current = dataRef.current;
+    const forceReload = loadId !== fetchedLoadIdRef.current;
+    // Only skip when we already have this exact user+month loaded.
+    // Month is always set after a successful fetch/applyPayload, so empty
+    // month means we still need to resolve the open month from the API.
+    const alreadyLoaded =
+      Boolean(month)
+      && current?.user?.id === userId
+      && current.month === month;
+
+    if (!forceReload && alreadyLoaded) {
+      setError("");
+      setPageLoading(false);
+      return undefined;
+    }
+
     let cancelled = false;
     setPageLoading(true);
     getBootstrap(month)
@@ -123,6 +144,8 @@ export default function App() {
         if (cancelled) return;
         setData(payload);
         setError("");
+        // Only resolve the initial empty month. Never override a user-selected month
+        // (e.g. viewing a past month, then retrying a failed load).
         if (!month && payload.month) setMonth(payload.month);
       })
       .catch((err) => {
@@ -135,7 +158,12 @@ export default function App() {
         }
       })
       .finally(() => {
-        if (!cancelled) setPageLoading(false);
+        if (cancelled) return;
+        // Mark this loadId handled on success or error so forceReload stays
+        // accurate. Leave it unchanged on cancel so a replacement effect with
+        // the same loadId can still fetch when data is missing.
+        fetchedLoadIdRef.current = loadId;
+        setPageLoading(false);
       });
     return () => {
       cancelled = true;

@@ -1,7 +1,8 @@
+# Local only: app always uses the Compose Postgres.
+# Live (Render) uses the Dockerfile + DATABASE_URL from the host env (Neon) — not this file.
 services:
   db:
     image: postgres:16-alpine
-    profiles: ["local-db"]
     environment:
       POSTGRES_USER: finance
       POSTGRES_PASSWORD: finance
@@ -25,8 +26,13 @@ services:
     env_file:
       - .env
     environment:
+      # Overrides Neon from .env so `docker compose up` never hits production data.
+      DATABASE_URL: postgres://finance:finance@db:5432/finance
       HOST: 0.0.0.0
       PORT: "8080"
+    depends_on:
+      db:
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:
