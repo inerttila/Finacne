@@ -61,12 +61,22 @@ export default function App() {
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [loadId, setLoadId] = useState(0);
   const [welcomeName, setWelcomeName] = useState("");
+  const [pageLoading, setPageLoading] = useState(true);
 
   const currentUser =
     users?.find((user) => user.id === userId) || data?.user || null;
 
   useEffect(() => {
+    if (screen === "app" && currentUser?.name) {
+      document.title = `${currentUser.name} · Net`;
+    } else {
+      document.title = "Net · monthly spending";
+    }
+  }, [screen, currentUser?.name]);
+
+  useEffect(() => {
     let cancelled = false;
+    setPageLoading(true);
     listUsers()
       .then((payload) => {
         if (cancelled) return;
@@ -77,24 +87,23 @@ export default function App() {
         if (storedOk) {
           setUserId(stored);
           setScreen("app");
-        } else if (nextUsers.length === 1) {
-          setStoredUserId(nextUsers[0].id);
-          setUserId(nextUsers[0].id);
-          setScreen("app");
         } else if (nextUsers.length === 0) {
           setStoredUserId(null);
           setUserId(null);
           setScreen("start");
+          setPageLoading(false);
         } else {
           setStoredUserId(null);
           setUserId(null);
           setScreen("pick");
+          setPageLoading(false);
         }
       })
       .catch((err) => {
         if (!cancelled) {
           setError(err.message);
           setScreen("start");
+          setPageLoading(false);
         }
       });
     return () => {
@@ -105,17 +114,20 @@ export default function App() {
   useEffect(() => {
     if (screen !== "app" || !userId) return undefined;
     let cancelled = false;
+    setPageLoading(true);
     getBootstrap(month)
       .then((payload) => {
         if (!cancelled) {
           setData(payload);
           setError("");
           if (!month && payload.month) setMonth(payload.month);
+          setPageLoading(false);
         }
       })
       .catch((err) => {
         if (!cancelled) {
           setError(err.message);
+          setPageLoading(false);
           if (/pick a user|user is gone/i.test(err.message)) {
             setStoredUserId(null);
             setUserId(null);
@@ -300,8 +312,10 @@ export default function App() {
 
   if (screen === "boot") {
     return (
-      <div className="page">
-        <p className="loading">Opening…</p>
+      <div className="boot-screen">
+        <LoadingBar active />
+        <p className="boot-title">Net</p>
+        <p className="boot-copy">Opening…</p>
       </div>
     );
   }
@@ -317,6 +331,7 @@ export default function App() {
   if (screen === "start" || screen === "create") {
     return (
       <div className="page">
+        <LoadingBar active={pageLoading} />
         {error && (
           <p className="banner" role="alert">
             {error}
@@ -338,6 +353,7 @@ export default function App() {
   if (screen === "pick") {
     return (
       <div className="page">
+        <LoadingBar active={pageLoading} />
         {error && (
           <p className="banner" role="alert">
             {error}
@@ -355,8 +371,19 @@ export default function App() {
     );
   }
 
+  if (!data && !error) {
+    return (
+      <div className="boot-screen">
+        <LoadingBar active />
+        <p className="boot-title">Net</p>
+        <p className="boot-copy">Reading the ledger…</p>
+      </div>
+    );
+  }
+
   return (
     <div className="page">
+      <LoadingBar active={pageLoading} />
       <header className="top">
         <div className="top-left">
           {currentUser && (
@@ -376,7 +403,7 @@ export default function App() {
           )}
           <div className="brand">
             <span>Net</span>
-            <small>monthly spending</small>
+            <small>{currentUser?.name ? currentUser.name : "monthly spending"}</small>
           </div>
         </div>
         <div className="top-actions">
@@ -431,8 +458,6 @@ export default function App() {
           )}
         </p>
       )}
-
-      {!data && !error && <p className="loading">Reading the ledger…</p>}
 
       {data && (
         <>
@@ -691,6 +716,20 @@ function shareOf(part, total) {
   const pct = (part / total) * 100;
   if (pct > 0 && pct < 1) return "<1%";
   return `${Math.round(pct)}%`;
+}
+
+function LoadingBar({ active }) {
+  return (
+    <div
+      className={active ? "loading-bar on" : "loading-bar"}
+      role="progressbar"
+      aria-label="Loading"
+      aria-busy={active}
+      aria-hidden={!active}
+    >
+      <span />
+    </div>
+  );
 }
 
 function HelloScreen({ name, onDone }) {
