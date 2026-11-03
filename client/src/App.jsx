@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useHexclaveApp, useUser } from "@hexclave/react";
+import { useHexclaveApp } from "@hexclave/react";
 import {
   createCategory,
   createTransaction,
@@ -49,7 +49,10 @@ function avatarColor(id) {
 
 export default function App() {
   const hexclave = useHexclaveApp();
-  const authUser = useUser();
+  // Prefer getUser over useUser so auth never re-suspends the tree (that
+  // remount was flashing the ledger on every API/token touch).
+  const [authUser, setAuthUser] = useState(null);
+  const [authReady, setAuthReady] = useState(false);
   const [users, setUsers] = useState(null);
   const [userId, setUserId] = useState(() => getStoredUserId());
   const [screen, setScreen] = useState("boot");
@@ -73,6 +76,18 @@ export default function App() {
     users?.find((user) => user.id === userId) || data?.user || null;
 
   useEffect(() => {
+    let cancelled = false;
+    hexclave.getUser().then((user) => {
+      if (cancelled) return;
+      setAuthUser(user);
+      setAuthReady(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [hexclave]);
+
+  useEffect(() => {
     if (screen === "app" && currentUser?.name) {
       document.title = `${currentUser.name} · Net`;
     } else {
@@ -81,6 +96,8 @@ export default function App() {
   }, [screen, currentUser?.name]);
 
   useEffect(() => {
+    if (!authReady) return undefined;
+
     if (!authUser) {
       setUsers(null);
       setUserId(null);
@@ -120,7 +137,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [authUser?.id]);
+  }, [authReady, authUser?.id]);
 
   const dataRef = useRef(data);
   dataRef.current = data;
@@ -150,7 +167,8 @@ export default function App() {
     }
 
     let cancelled = false;
-    setPageLoading(true);
+    // Keep stale rows on screen — only show the top bar when we have nothing yet.
+    if (!current) setPageLoading(true);
     getBootstrap(month)
       .then((payload) => {
         if (cancelled) return;
@@ -180,7 +198,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [screen, userId, month, loadId, users]);
+  }, [screen, userId, month, loadId]);
 
   function applyPayload(payload) {
     setData(payload);
@@ -227,6 +245,7 @@ export default function App() {
     setError("");
     try {
       await authUser.signOut();
+      setAuthUser(null);
       setStoredUserId(null);
       setUserId(null);
       setUsers(null);
@@ -362,10 +381,15 @@ export default function App() {
     setAddTarget(target);
   }
 
+  const openMonthKey = data && !data.closed ? data.openMonth : "";
+  const monthAdvanceRef = useRef("");
+
   useEffect(() => {
-    if (!data || data.closed || screen !== "app") return undefined;
+    if (screen !== "app" || !openMonthKey) return undefined;
     const todayMonth = todayIso().slice(0, 7);
-    if (todayMonth <= data.openMonth) return undefined;
+    if (todayMonth <= openMonthKey) return undefined;
+    if (monthAdvanceRef.current === openMonthKey) return undefined;
+    monthAdvanceRef.current = openMonthKey;
 
     let cancelled = false;
     (async () => {
@@ -377,14 +401,17 @@ export default function App() {
         applyPayload(payload);
         setError("");
       } catch (err) {
-        if (!cancelled) setError(err.message);
+        if (!cancelled) {
+          monthAdvanceRef.current = "";
+          setError(err.message);
+        }
       }
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [data, screen]);
+  }, [screen, openMonthKey]);
 
   if (screen === "boot") {
     return (
@@ -1653,21 +1680,13 @@ function Hero({ data, onSaved, onError }) {
   return (
     <section className="hero">
       <div>
-        <p className="eyebrow hero-eyebrow">
+        <p className="eyebrow">
           {remaining >= 0 ? "Left" : "Over the net"} · {formatMonth(data.month)}
         </p>
-        <p
-          className={
-            remaining >= 0
-              ? "figure huge hero-amount"
-              : "figure huge hero-amount negative"
-          }
-        >
+        <p className={remaining >= 0 ? "figure huge" : "figure huge negative"}>
           {lek(Math.abs(remaining))}
         </p>
-        <p className="sub hero-sub">
-          of {lek(data.income)} net · amounts in lek
-        </p>
+        <p className="sub">of {lek(data.income)} net · amounts in lek</p>
         {site > 0 && (
           <p className="carry">
             + {lek(site)} <span>site money</span>

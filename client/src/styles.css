@@ -117,14 +117,6 @@ button { cursor: pointer; }
     0%, 100% { opacity: 0.35; }
     50% { opacity: 1; }
   }
-
-  .hero-eyebrow,
-  .hero-amount,
-  .hero-sub {
-    animation: none;
-    opacity: 1;
-    transform: none;
-  }
 }
 
 .top {
@@ -723,18 +715,6 @@ button { cursor: pointer; }
 }
 
 .huge.negative { color: var(--red); }
-
-.hero-eyebrow {
-  animation: auth-fade-up 620ms cubic-bezier(0.22, 1, 0.36, 1) both;
-}
-
-.hero-amount {
-  animation: auth-fade-up 760ms cubic-bezier(0.22, 1, 0.36, 1) 80ms both;
-}
-
-.hero-sub {
-  animation: auth-fade-up 720ms cubic-bezier(0.22, 1, 0.36, 1) 180ms both;
-}
 
 .sub { margin: 8px 0 0; }
 
