@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
+import { resolveFiscalInvoice } from "./invoice.js";
 import { CATEGORIES, categorize, isWeekendIso } from "./parse.js";
 import { ensureSchema } from "./schema.js";
 
@@ -497,6 +498,23 @@ app.get("/api/bootstrap", async (req, res, next) => {
 app.get("/api/suggest", (req, res) => {
   const description = String(req.query.description || "");
   res.json({ category: categorize(description) });
+});
+
+app.post("/api/invoice-scan", async (req, res, next) => {
+  try {
+    await resolveUserId(req);
+    const raw = req.body?.url || req.body?.qr || req.body?.text || "";
+    const invoice = await resolveFiscalInvoice(raw);
+    res.json({
+      ...invoice,
+      category: categorize(invoice.description),
+    });
+  } catch (error) {
+    if (error.status) {
+      return res.status(error.status).json({ error: error.message });
+    }
+    next(error);
+  }
 });
 
 app.post("/api/categories", async (req, res, next) => {

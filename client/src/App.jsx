@@ -13,10 +13,12 @@ import {
   renameCategory,
   saveIncome,
   saveSiteMoney,
+  scanInvoice,
   setStoredUserId,
   suggest,
   updateTransaction,
 } from "./api.js";
+import { Html5Qrcode } from "html5-qrcode";
 import {
   countLines,
   defaultDateInMonth,
@@ -57,6 +59,7 @@ export default function App() {
   const [addTarget, setAddTarget] = useState(null);
   const [editingId, setEditingId] = useState(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [scanOpen, setScanOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [loadId, setLoadId] = useState(0);
   const [welcomeName, setWelcomeName] = useState("");
@@ -430,6 +433,21 @@ export default function App() {
           </div>
         </div>
         <div className="top-actions">
+          {data && (!data.closed || data.month === data.pastMonth) && (
+            <button
+              type="button"
+              className="icon-btn"
+              aria-label="Scan fiscal QR"
+              onClick={() => setScanOpen(true)}
+            >
+              <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                <path
+                  fill="currentColor"
+                  d="M3 3h7v2H5v5H3V3zm11 0h7v7h-2V5h-5V3zM3 14h2v5h5v2H3v-7zm16 0h2v7h-7v-2h5v-5zM7 7h4v4H7V7zm6 0h4v4h-4V7zM7 13h4v4H7v-4zm6 3h1v1h-1v-1zm2-3h1v1h-1v-1zm0 2h1v1h-1v-1zm2-2h1v4h-1v-4z"
+                />
+              </svg>
+            </button>
+          )}
           <button
             type="button"
             className="icon-btn"
@@ -715,6 +733,20 @@ export default function App() {
           onSaved={(payload) => {
             applyPayload(payload);
             setAddTarget(null);
+          }}
+          onError={setError}
+        />
+      )}
+
+      {scanOpen && data && (
+        <ScanInvoiceModal
+          categories={data.categories}
+          monthKey={data.closed ? data.month : data.openMonth}
+          onClose={() => setScanOpen(false)}
+          onSaved={(payload) => {
+            applyPayload(payload);
+            setScanOpen(false);
+            setError("");
           }}
           onError={setError}
         />
@@ -1676,6 +1708,286 @@ function MonthList({ data, onOpen }) {
             <strong>{lek(item.spent)}</strong>
           </button>
         ))}
+      </div>
+    </div>
+  );
+}
+
+function clampDateToMonth(iso, monthKey) {
+  const bounds = monthDayBounds(monthKey);
+  if (!iso) return defaultDateInMonth(monthKey);
+  if (iso < bounds.min) return bounds.min;
+  if (iso > bounds.max) return bounds.max;
+  return iso;
+}
+
+function ScanInvoiceModal({ categories, monthKey, onClose, onSaved, onError }) {
+  const [phase, setPhase] = useState("scan");
+  const [paste, setPaste] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [camError, setCamError] = useState("");
+  const [camKey, setCamKey] = useState(0);
+  const [draft, setDraft] = useState(null);
+  const scannerRef = useRef(null);
+  const handledRef = useRef(false);
+
+  useEffect(() => {
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    function onKey(event) {
+      if (event.key === "Escape" && !saving && !loading) onClose();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.body.style.overflow = previous;
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [onClose, saving, loading]);
+
+  useEffect(() => {
+    if (phase !== "scan") return undefined;
+    handledRef.current = false;
+    let scanner;
+    let cancelled = false;
+
+    (async () => {
+      try {
+        scanner = new Html5Qrcode("fiscal-qr-reader", { verbose: false });
+        scannerRef.current = scanner;
+        await scanner.start(
+          { facingMode: "environment" },
+          { fps: 8, qrbox: { width: 240, height: 240 } },
+          async (decoded) => {
+            if (handledRef.current || cancelled) return;
+            handledRef.current = true;
+            try {
+              await scanner.stop();
+            } catch {
+              /* already stopped */
+            }
+            await lookup(decoded);
+          },
+        );
+        if (!cancelled) setCamError("");
+      } catch (err) {
+        if (!cancelled) {
+          setCamError(
+            err?.message?.includes("Permission")
+              ? "Camera permission is needed, or paste the invoice link below."
+              : "Camera is unavailable here. Paste the invoice link below.",
+          );
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      const active = scannerRef.current;
+      scannerRef.current = null;
+      if (active?.isScanning) {
+        active.stop().catch(() => {});
+      }
+    };
+  }, [phase, camKey]);
+
+  async function lookup(raw) {
+    setLoading(true);
+    setCamError("");
+    try {
+      const invoice = await scanInvoice(raw);
+      setDraft({
+        description: invoice.description,
+        amount: String(invoice.amount),
+        category: invoice.category || "other",
+        spentOn: clampDateToMonth(invoice.spentOn, monthKey),
+        seller: invoice.seller,
+        invoiceNumber: invoice.invoiceNumber,
+        items: invoice.items || [],
+      });
+      setPhase("review");
+      onError("");
+    } catch (err) {
+      handledRef.current = false;
+      setPhase("scan");
+      setCamKey((value) => value + 1);
+      setCamError(err.message);
+      onError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function onSubmit(event) {
+    event.preventDefault();
+    const parsed = parseMoney(draft.amount);
+    if (!parsed || !draft.description.trim()) {
+      onError("Enter an amount and what it was for.");
+      return;
+    }
+    setSaving(true);
+    try {
+      onSaved(
+        await createTransaction({
+          amount: parsed,
+          description: draft.description.trim(),
+          category: draft.category,
+          spentOn: draft.spentOn,
+          fixed: false,
+        }),
+      );
+      onError("");
+    } catch (err) {
+      onError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const bounds = monthDayBounds(monthKey);
+
+  return (
+    <div className="modal-back add-back" onClick={() => !loading && !saving && onClose()}>
+      <div
+        className="modal add-sheet scan-sheet"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="scan-invoice-title"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="add-sheet-head">
+          <h2 id="scan-invoice-title">
+            {phase === "review" ? "Confirm expense" : "Scan fiscal QR"}
+          </h2>
+          <button
+            type="button"
+            className="icon-btn"
+            aria-label="Close"
+            disabled={loading || saving}
+            onClick={onClose}
+          >
+            ×
+          </button>
+        </div>
+
+        {phase === "scan" && (
+          <div className="scan-body">
+            <p className="hint">
+              Point the camera at the QR on a Tatime fiscal invoice, or paste
+              the verify link.
+            </p>
+            <div id="fiscal-qr-reader" className="scan-camera" key={camKey} />
+            {loading && <p className="hint">Reading invoice…</p>}
+            {camError && (
+              <p className="banner" role="alert">
+                {camError}
+              </p>
+            )}
+            <label className="scan-paste">
+              Invoice link
+              <textarea
+                rows={3}
+                value={paste}
+                placeholder="https://efiskalizimi-app.tatime.gov.al/invoice-check/#/verify?iic=…"
+                onChange={(event) => setPaste(event.target.value)}
+              />
+            </label>
+            <div className="editor-actions">
+              <button
+                className="btn primary"
+                type="button"
+                disabled={loading || !paste.trim()}
+                onClick={() => lookup(paste)}
+              >
+                {loading ? "Reading…" : "Read link"}
+              </button>
+              <button className="btn" type="button" onClick={onClose}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+
+        {phase === "review" && draft && (
+          <form className="editor add-form" onSubmit={onSubmit}>
+            {draft.seller && (
+              <p className="hint month-form-note">From {draft.seller}</p>
+            )}
+            <label>
+              Amount
+              <input
+                value={draft.amount}
+                inputMode="numeric"
+                onChange={(event) =>
+                  setDraft({ ...draft, amount: event.target.value })
+                }
+              />
+            </label>
+            <label className="grow">
+              What it was
+              <input
+                value={draft.description}
+                onChange={(event) =>
+                  setDraft({ ...draft, description: event.target.value })
+                }
+              />
+            </label>
+            <label>
+              Category
+              <select
+                value={draft.category}
+                onChange={(event) =>
+                  setDraft({ ...draft, category: event.target.value })
+                }
+              >
+                {categories.map((item) => (
+                  <option key={item.slug} value={item.slug}>
+                    {item.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Date
+              <input
+                type="date"
+                min={bounds.min}
+                max={bounds.max}
+                value={draft.spentOn}
+                onChange={(event) =>
+                  setDraft({ ...draft, spentOn: event.target.value })
+                }
+              />
+            </label>
+            {draft.items?.length > 1 && (
+              <ul className="scan-items">
+                {draft.items.map((item, index) => (
+                  <li key={`${item.name}-${index}`}>
+                    <span>{item.name}</span>
+                    <strong>{lek(item.amount)}</strong>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <div className="editor-actions">
+              <button className="btn primary" type="submit" disabled={saving}>
+                {saving ? "Saving…" : "Add to ledger"}
+              </button>
+              <button
+                className="btn"
+                type="button"
+                disabled={saving}
+                onClick={() => {
+                  setDraft(null);
+                  setCamKey((value) => value + 1);
+                  setPhase("scan");
+                }}
+              >
+                Scan again
+              </button>
+            </div>
+          </form>
+        )}
       </div>
     </div>
   );

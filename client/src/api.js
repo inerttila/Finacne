@@ -117,3 +117,10 @@ export function openNextMonth(force = false) {
     body: JSON.stringify({ force }),
   });
 }
+
+export function scanInvoice(url) {
+  return request("/api/invoice-scan", {
+    method: "POST",
+    body: JSON.stringify({ url }),
+  });
+}

@@ -1102,6 +1102,76 @@ button { cursor: pointer; }
   justify-content: flex-end;
 }
 
+.scan-sheet {
+  width: min(520px, 100%);
+}
+
+.scan-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.scan-camera {
+  width: 100%;
+  min-height: 220px;
+  overflow: hidden;
+  border-radius: 16px;
+  background: #1c1915;
+}
+
+.scan-camera video {
+  width: 100% !important;
+  border-radius: 16px;
+}
+
+.scan-paste {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.scan-paste textarea {
+  width: 100%;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: #fffdf8;
+  padding: 10px 12px;
+  resize: vertical;
+  font: inherit;
+  color: var(--ink);
+}
+
+.scan-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.scan-items li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: rgba(255, 253, 248, 0.8);
+  font-size: 13px;
+}
+
+.scan-items span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .icon-btn {
   width: 38px;
   height: 38px;
