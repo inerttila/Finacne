@@ -1145,6 +1145,22 @@ button { cursor: pointer; }
   color: var(--ink);
 }
 
+.scan-hint-mobile {
+  display: none;
+}
+
+@media (max-width: 860px) {
+  .scan-paste,
+  .scan-paste-action,
+  .scan-hint-desktop {
+    display: none;
+  }
+
+  .scan-hint-mobile {
+    display: block;
+  }
+}
+
 .scan-items {
   list-style: none;
   margin: 0;

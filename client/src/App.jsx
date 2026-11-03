@@ -1872,7 +1872,10 @@ function ScanInvoiceModal({ categories, monthKey, onClose, onSaved, onError }) {
 
         {phase === "scan" && (
           <div className="scan-body">
-            <p className="hint">
+            <p className="hint scan-hint-mobile">
+              Point the camera at the QR on a Tatime fiscal invoice.
+            </p>
+            <p className="hint scan-hint-desktop">
               Point the camera at the QR on a Tatime fiscal invoice, or paste
               the verify link.
             </p>
@@ -1894,7 +1897,7 @@ function ScanInvoiceModal({ categories, monthKey, onClose, onSaved, onError }) {
             </label>
             <div className="editor-actions">
               <button
-                className="btn primary"
+                className="btn primary scan-paste-action"
                 type="button"
                 disabled={loading || !paste.trim()}
                 onClick={() => lookup(paste)}
