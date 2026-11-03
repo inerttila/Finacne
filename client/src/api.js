@@ -1,7 +1,27 @@
+const USER_KEY = "finance-user-id";
+
+let currentUserId = Number(localStorage.getItem(USER_KEY)) || null;
+
+export function getStoredUserId() {
+  return currentUserId;
+}
+
+export function setStoredUserId(id) {
+  currentUserId = id ? Number(id) : null;
+  if (currentUserId) localStorage.setItem(USER_KEY, String(currentUserId));
+  else localStorage.removeItem(USER_KEY);
+}
+
 async function request(url, options = {}) {
+  const headers = {
+    "Content-Type": "application/json",
+    ...(options.headers || {}),
+  };
+  if (currentUserId) headers["X-User-Id"] = String(currentUserId);
+
   const response = await fetch(url, {
-    headers: { "Content-Type": "application/json" },
     ...options,
+    headers,
   });
   if (!response.ok) {
     let message = "The ledger could not be updated.";
@@ -17,6 +37,25 @@ async function request(url, options = {}) {
   return response.json();
 }
 
+export function listUsers() {
+  return request("/api/users");
+}
+
+export function getCategoryDefaults() {
+  return request("/api/category-defaults");
+}
+
+export function createUser(name, net, categories) {
+  return request("/api/users", {
+    method: "POST",
+    body: JSON.stringify({ name, net, categories }),
+  });
+}
+
+export function deleteCurrentUser() {
+  return request("/api/users/me", { method: "DELETE" });
+}
+
 export function getBootstrap(month) {
   const query = month ? `?month=${encodeURIComponent(month)}` : "";
   return request(`/api/bootstrap${query}`);
@@ -30,6 +69,13 @@ export function saveIncome(month, amount) {
   return request("/api/income", {
     method: "PUT",
     body: JSON.stringify({ month, amount }),
+  });
+}
+
+export function saveSiteMoney(month, site) {
+  return request("/api/income", {
+    method: "PUT",
+    body: JSON.stringify({ month, site }),
   });
 }
 

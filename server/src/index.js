@@ -76,8 +76,11 @@ function mapTx(row) {
   };
 }
 
-async function categoryExists(slug) {
-  const { rowCount } = await pool.query("select 1 from categories where slug = $1", [slug]);
+async function categoryExists(userId, slug) {
+  const { rowCount } = await pool.query(
+    "select 1 from categories where user_id = $1 and slug = $2",
+    [userId, slug],
+  );
   return rowCount > 0;
 }
 
@@ -100,90 +103,162 @@ function slugify(name) {
 
 const NEW_COLORS = ["#9a4d6b", "#3f6b4a", "#6a5428", "#355c7d", "#7d4e2d", "#4a5d48", "#6b3f55", "#3d5a62"];
 
-async function uniqueSlug(base) {
+async function uniqueSlug(userId, base) {
   let slug = base;
   let n = 2;
   for (;;) {
-    const found = await pool.query("select 1 from categories where slug = $1", [slug]);
+    const found = await pool.query(
+      "select 1 from categories where user_id = $1 and slug = $2",
+      [userId, slug],
+    );
     if (!found.rowCount) return slug;
     slug = `${base.slice(0, 28)}-${n}`;
     n += 1;
   }
 }
 
-async function migrate() {
+async function seedCategoriesForUser(userId, list = CATEGORIES) {
+  for (const [index, category] of list.entries()) {
+    await pool.query(
+      `insert into categories (user_id, slug, name, color, sort_order)
+       values ($1, $2, $3, $4, $5)
+       on conflict (user_id, slug) do update
+       set name = excluded.name,
+           color = excluded.color,
+           sort_order = excluded.sort_order`,
+      [userId, category.slug, category.name, category.color, index],
+    );
+  }
+}
+
+function normalizeCategorySetup(input) {
+  const source = Array.isArray(input) && input.length ? input : CATEGORIES;
+  const out = [];
+  const seen = new Set();
+  for (const [index, item] of source.entries()) {
+    const name = cleanCategoryName(item?.name) || cleanCategoryName(item?.slug);
+    if (!name) continue;
+    let slug = slugify(String(item?.slug || name));
+    if (seen.has(slug)) slug = `${slug}-${index + 1}`;
+    seen.add(slug);
+    const color = String(item?.color || "").trim() || NEW_COLORS[index % NEW_COLORS.length];
+    out.push({ slug, name, color });
+  }
+  if (!out.some((item) => item.slug === "other")) {
+    const fallback = CATEGORIES.find((item) => item.slug === "other");
+    out.push({ slug: fallback.slug, name: fallback.name, color: fallback.color });
+  }
+  return out.length ? out : CATEGORIES.map((item) => ({ ...item }));
+}
+
+function mapUser(row) {
+  return {
+    id: row.id,
+    name: row.name,
+    initial: String(row.name || "?").trim().charAt(0).toUpperCase() || "?",
+  };
+}
+
+async function listUsers() {
+  const { rows } = await pool.query("select id, name from users order by id");
+  return rows.map(mapUser);
+}
+
+async function getUser(id) {
+  const { rows } = await pool.query("select id, name from users where id = $1", [id]);
+  return rows[0] ? mapUser(rows[0]) : null;
+}
+
+async function resolveUserId(req) {
+  const raw = req.headers["x-user-id"] ?? req.query?.userId ?? req.body?.userId;
+  const id = Number(raw);
+  if (!Number.isInteger(id) || id <= 0) {
+    const error = new Error("Pick a user first.");
+    error.status = 401;
+    throw error;
+  }
+  const user = await getUser(id);
+  if (!user) {
+    const error = new Error("That user is gone.");
+    error.status = 401;
+    throw error;
+  }
+  return user;
+}
+
+async function ensureSchema() {
   await pool.query(`
+    create table if not exists users (
+      id serial primary key,
+      name text not null,
+      created_at timestamptz not null default now()
+    );
+
     create table if not exists categories (
-      slug text primary key,
+      user_id int not null references users(id),
+      slug text not null,
       name text not null,
       color text not null,
-      sort_order int not null
+      sort_order int not null,
+      primary key (user_id, slug)
     );
 
     create table if not exists income (
-      month date primary key,
-      amount int not null check (amount >= 0)
+      user_id int not null references users(id),
+      month date not null,
+      amount int not null check (amount >= 0),
+      site_amount int not null default 0 check (site_amount >= 0),
+      primary key (user_id, month)
     );
 
     create table if not exists transactions (
       id serial primary key,
+      user_id int not null references users(id),
       amount int not null check (amount > 0),
       description text not null,
-      category_slug text not null references categories(slug),
+      category_slug text not null,
       people text[] not null default '{}',
       spent_on date not null,
       weekend boolean not null default false,
       sort_order int not null default 0,
       fixed boolean not null default false,
-      created_at timestamptz not null default now()
+      created_at timestamptz not null default now(),
+      foreign key (user_id, category_slug) references categories(user_id, slug)
     );
-  `);
-  await pool.query(`
-    alter table transactions drop column if exists date_estimated;
-    alter table transactions drop column if exists imported;
-    alter table transactions drop column if exists raw_line;
-    drop table if exists checkpoints;
-    alter table categories drop column if exists hint;
-  `);
-  await pool.query("alter table transactions add column if not exists fixed boolean not null default false");
 
-  for (const [index, category] of CATEGORIES.entries()) {
-    await pool.query(
-      `insert into categories (slug, name, color, sort_order)
-       values ($1, $2, $3, $4)
-       on conflict (slug) do update
-       set color = excluded.color,
-           sort_order = excluded.sort_order`,
-      [category.slug, category.name, category.color, index],
-    );
-  }
+    create index if not exists transactions_user_spent_idx on transactions (user_id, spent_on desc);
+    create unique index if not exists users_name_unique_ci on users (lower(name));
+  `);
 }
 
-async function monthSummaries() {
+async function monthSummaries(userId) {
   const { rows } = await pool.query(`
     with months as (
-      select month from income
+      select month from income where user_id = $1
       union
-      select date_trunc('month', spent_on)::date as month from transactions
+      select date_trunc('month', spent_on)::date as month from transactions where user_id = $1
     )
     select to_char(m.month, 'YYYY-MM') as month,
            coalesce(i.amount, 0)::int as income,
+           coalesce(i.site_amount, 0)::int as site,
            coalesce(t.spent, 0)::int as spent,
            coalesce(t.line_count, 0)::int as line_count
     from months m
-    left join income i on i.month = m.month
+    left join income i on i.month = m.month and i.user_id = $1
     left join (
       select date_trunc('month', spent_on)::date as month,
              sum(amount)::int as spent,
              count(*)::int as line_count
       from transactions
+      where user_id = $1
       group by 1
     ) t on t.month = m.month
     order by m.month desc
-  `);
+  `, [userId]);
   const plain = rows.map((row) => ({
     month: row.month,
     income: row.income,
+    site: row.site,
     spent: row.spent,
     count: row.line_count,
   }));
@@ -197,7 +272,7 @@ function applyCarry(summaries) {
   const enriched = new Map();
   for (const item of ordered) {
     const carried = onHand;
-    const remaining = item.income + carried - item.spent;
+    const remaining = item.income + (item.site || 0) + carried - item.spent;
     enriched.set(item.month, {
       ...item,
       carried,
@@ -210,25 +285,39 @@ function applyCarry(summaries) {
   return summaries.map((item) => enriched.get(item.month));
 }
 
-async function ensureIncome(monthKey) {
+async function ensureIncome(userId, monthKey, amount = null) {
   const bounds = monthBounds(monthKey);
   if (!bounds) return;
-  const existing = await pool.query("select amount from income where month = $1", [bounds.start]);
-  if (existing.rowCount) return;
-  const previous = await pool.query(
-    "select amount from income where month < $1 order by month desc limit 1",
-    [bounds.start],
+  const existing = await pool.query(
+    "select amount from income where user_id = $1 and month = $2",
+    [userId, bounds.start],
   );
-  if (!previous.rowCount) return;
+  if (existing.rowCount) return;
+  let net = amount;
+  if (net == null) {
+    const previous = await pool.query(
+      "select amount from income where user_id = $1 and month < $2 order by month desc limit 1",
+      [userId, bounds.start],
+    );
+    if (!previous.rowCount) return;
+    net = previous.rows[0].amount;
+  }
   await pool.query(
-    `insert into income (month, amount) values ($1, $2)
-     on conflict (month) do nothing`,
-    [bounds.start, previous.rows[0].amount],
+    `insert into income (user_id, month, amount, site_amount) values ($1, $2, $3, 0)
+     on conflict (user_id, month) do nothing`,
+    [userId, bounds.start, net],
   );
 }
 
-async function loadMonth(month) {
-  const summaries = await monthSummaries();
+async function loadMonth(userId, month) {
+  const user = await getUser(userId);
+  if (!user) {
+    const error = new Error("That user is gone.");
+    error.status = 401;
+    throw error;
+  }
+
+  const summaries = await monthSummaries(userId);
   const openMonth = summaries[0]?.month || month || todayKey();
   const key = month || openMonth;
   const bounds = monthBounds(key);
@@ -239,21 +328,28 @@ async function loadMonth(month) {
   }
 
   const [incomeResult, txResult, categoryResult] = await Promise.all([
-    pool.query("select amount from income where month = $1", [bounds.start]),
+    pool.query(
+      "select amount, site_amount from income where user_id = $1 and month = $2",
+      [userId, bounds.start],
+    ),
     pool.query(
       `select id, amount, description, category_slug, people,
               to_char(spent_on, 'YYYY-MM-DD') as spent_on,
               weekend, fixed
        from transactions
-       where spent_on >= $1 and spent_on < $2
-       order by spent_on, sort_order, id`,
-      [bounds.start, bounds.next],
+       where user_id = $1 and spent_on >= $2 and spent_on < $3
+       order by spent_on desc, sort_order desc, id desc`,
+      [userId, bounds.start, bounds.next],
     ),
-    pool.query("select slug, name, color from categories order by sort_order, slug"),
+    pool.query(
+      "select slug, name, color from categories where user_id = $1 order by sort_order, slug",
+      [userId],
+    ),
   ]);
 
   const transactions = txResult.rows.map(mapTx);
   const income = incomeResult.rows[0]?.amount ?? 0;
+  const site = incomeResult.rows[0]?.site_amount ?? 0;
   const spent = transactions.reduce((sum, tx) => sum + tx.amount, 0);
   const byCategory = categoryResult.rows.map((category) => {
     const rows = transactions.filter((tx) => tx.category === category.slug);
@@ -296,6 +392,7 @@ async function loadMonth(month) {
   const monthList = summaries.map((item) => ({ ...item, open: item.month === openMonth }));
 
   return {
+    user,
     month: bounds.key,
     months: summaries.map((item) => item.month).sort(),
     monthList,
@@ -303,10 +400,11 @@ async function loadMonth(month) {
     pastMonth: summaries.find((item) => item.month !== openMonth)?.month ?? null,
     closed: bounds.key !== openMonth,
     income,
+    site,
     carried,
     carriedFrom: viewed?.carriedFrom ?? null,
     spent,
-    remaining: income + carried - spent,
+    remaining: income + site + carried - spent,
     dayToDay: spent - peopleTotal - bankTotal,
     peopleTotal,
     bankTotal,
@@ -329,9 +427,85 @@ app.get("/api/health", async (_req, res, next) => {
   }
 });
 
+app.get("/api/users", async (_req, res, next) => {
+  try {
+    res.json({ users: await listUsers() });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/category-defaults", (_req, res) => {
+  res.json({ categories: CATEGORIES });
+});
+
+app.post("/api/users", async (req, res, next) => {
+  try {
+    const name = String(req.body?.name || "").trim().replace(/\s+/g, " ");
+    const net = Number(String(req.body?.net ?? "").trim().replace(/\s/g, ""));
+    if (!name || name.length > 40) {
+      return res.status(400).json({ error: "Enter a name." });
+    }
+    if (!Number.isInteger(net) || net < 0 || net > 100_000_000) {
+      return res.status(400).json({ error: "Enter the net as a whole number." });
+    }
+    const taken = await pool.query("select 1 from users where lower(name) = lower($1)", [name]);
+    if (taken.rowCount) {
+      return res.status(400).json({ error: "That name is already used." });
+    }
+    const setup = normalizeCategorySetup(req.body?.categories);
+    let rows;
+    try {
+      ({ rows } = await pool.query(
+        "insert into users (name) values ($1) returning id, name",
+        [name],
+      ));
+    } catch (error) {
+      if (error.code === "23505") {
+        return res.status(400).json({ error: "That name is already used." });
+      }
+      throw error;
+    }
+    const user = mapUser(rows[0]);
+    await seedCategoriesForUser(user.id, setup);
+    await ensureIncome(user.id, todayKey(), net);
+    res.status(201).json({
+      user,
+      users: await listUsers(),
+      ledger: await loadMonth(user.id),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/users/me", async (req, res, next) => {
+  try {
+    const user = await resolveUserId(req);
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      await client.query("delete from transactions where user_id = $1", [user.id]);
+      await client.query("delete from income where user_id = $1", [user.id]);
+      await client.query("delete from categories where user_id = $1", [user.id]);
+      await client.query("delete from users where id = $1", [user.id]);
+      await client.query("commit");
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
+    } finally {
+      client.release();
+    }
+    res.json({ users: await listUsers() });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/bootstrap", async (req, res, next) => {
   try {
-    res.json(await loadMonth(req.query.month));
+    const user = await resolveUserId(req);
+    res.json(await loadMonth(user.id, req.query.month));
   } catch (error) {
     next(error);
   }
@@ -344,18 +518,28 @@ app.get("/api/suggest", (req, res) => {
 
 app.post("/api/categories", async (req, res, next) => {
   try {
+    const user = await resolveUserId(req);
     const name = cleanCategoryName(req.body?.name);
     if (!name) return res.status(400).json({ error: "Give the category a name." });
-    const taken = await pool.query("select 1 from categories where lower(name) = lower($1)", [name]);
-    if (taken.rowCount) return res.status(400).json({ error: "That category already exists." });
-    const slug = await uniqueSlug(slugify(name));
-    const count = await pool.query("select count(*)::int as n from categories");
-    const sort = await pool.query("select coalesce(max(sort_order), 0) + 1 as next from categories");
-    await pool.query(
-      `insert into categories (slug, name, color, sort_order) values ($1, $2, $3, $4)`,
-      [slug, name, NEW_COLORS[count.rows[0].n % NEW_COLORS.length], sort.rows[0].next],
+    const taken = await pool.query(
+      "select 1 from categories where user_id = $1 and lower(name) = lower($2)",
+      [user.id, name],
     );
-    res.status(201).json(await loadMonth(req.body?.month));
+    if (taken.rowCount) return res.status(400).json({ error: "That category already exists." });
+    const slug = await uniqueSlug(user.id, slugify(name));
+    const count = await pool.query(
+      "select count(*)::int as n from categories where user_id = $1",
+      [user.id],
+    );
+    const sort = await pool.query(
+      "select coalesce(max(sort_order), 0) + 1 as next from categories where user_id = $1",
+      [user.id],
+    );
+    await pool.query(
+      `insert into categories (user_id, slug, name, color, sort_order) values ($1, $2, $3, $4, $5)`,
+      [user.id, slug, name, NEW_COLORS[count.rows[0].n % NEW_COLORS.length], sort.rows[0].next],
+    );
+    res.status(201).json(await loadMonth(user.id, req.body?.month));
   } catch (error) {
     next(error);
   }
@@ -363,17 +547,21 @@ app.post("/api/categories", async (req, res, next) => {
 
 app.patch("/api/categories/:slug", async (req, res, next) => {
   try {
+    const user = await resolveUserId(req);
     const slug = String(req.params.slug);
-    if (!await categoryExists(slug)) return res.status(404).json({ error: "That category is gone." });
+    if (!await categoryExists(user.id, slug)) return res.status(404).json({ error: "That category is gone." });
     const name = cleanCategoryName(req.body?.name);
     if (!name) return res.status(400).json({ error: "Give the category a name." });
     const taken = await pool.query(
-      "select 1 from categories where lower(name) = lower($1) and slug <> $2",
-      [name, slug],
+      "select 1 from categories where user_id = $1 and lower(name) = lower($2) and slug <> $3",
+      [user.id, name, slug],
     );
     if (taken.rowCount) return res.status(400).json({ error: "That category already exists." });
-    await pool.query("update categories set name = $1 where slug = $2", [name, slug]);
-    res.json(await loadMonth(req.body?.month));
+    await pool.query(
+      "update categories set name = $1 where user_id = $2 and slug = $3",
+      [name, user.id, slug],
+    );
+    res.json(await loadMonth(user.id, req.body?.month));
   } catch (error) {
     next(error);
   }
@@ -381,11 +569,12 @@ app.patch("/api/categories/:slug", async (req, res, next) => {
 
 app.post("/api/months", async (req, res, next) => {
   try {
-    const summaries = await monthSummaries();
+    const user = await resolveUserId(req);
+    const summaries = await monthSummaries(user.id);
     const latest = summaries[0] || null;
     const key = resolveNextMonth(latest, Boolean(req.body?.force));
-    if (!latest || key !== latest.month) await ensureIncome(key);
-    res.status(201).json(await loadMonth(key));
+    if (!latest || key !== latest.month) await ensureIncome(user.id, key);
+    res.status(201).json(await loadMonth(user.id, key));
   } catch (error) {
     next(error);
   }
@@ -393,17 +582,47 @@ app.post("/api/months", async (req, res, next) => {
 
 app.put("/api/income", async (req, res, next) => {
   try {
+    const user = await resolveUserId(req);
     const bounds = monthBounds(req.body?.month);
-    const amount = Number(String(req.body?.amount ?? "").trim().replace(/\s/g, ""));
-    if (!bounds || !Number.isInteger(amount) || amount < 0 || amount > 100_000_000) {
+    if (!bounds) {
       return res.status(400).json({ error: "Enter the net as a whole number." });
     }
-    await pool.query(
-      `insert into income (month, amount) values ($1, $2)
-       on conflict (month) do update set amount = excluded.amount`,
-      [bounds.start, amount],
+
+    const hasAmount = req.body?.amount != null;
+    const hasSite = req.body?.site != null;
+    if (!hasAmount && !hasSite) {
+      return res.status(400).json({ error: "Enter the net as a whole number." });
+    }
+
+    const amount = hasAmount
+      ? Number(String(req.body.amount).trim().replace(/\s/g, ""))
+      : null;
+    const site = hasSite
+      ? Number(String(req.body.site).trim().replace(/\s/g, ""))
+      : null;
+
+    if (hasAmount && (!Number.isInteger(amount) || amount < 0 || amount > 100_000_000)) {
+      return res.status(400).json({ error: "Enter the net as a whole number." });
+    }
+    if (hasSite && (!Number.isInteger(site) || site < 0 || site > 100_000_000)) {
+      return res.status(400).json({ error: "Enter the site money as a whole number." });
+    }
+
+    const existing = await pool.query(
+      "select amount, site_amount from income where user_id = $1 and month = $2",
+      [user.id, bounds.start],
     );
-    res.json(await loadMonth(bounds.key));
+    const nextAmount = hasAmount ? amount : (existing.rows[0]?.amount ?? 0);
+    const nextSite = hasSite ? site : (existing.rows[0]?.site_amount ?? 0);
+
+    await pool.query(
+      `insert into income (user_id, month, amount, site_amount) values ($1, $2, $3, $4)
+       on conflict (user_id, month) do update
+       set amount = excluded.amount,
+           site_amount = excluded.site_amount`,
+      [user.id, bounds.start, nextAmount, nextSite],
+    );
+    res.json(await loadMonth(user.id, bounds.key));
   } catch (error) {
     next(error);
   }
@@ -411,29 +630,33 @@ app.put("/api/income", async (req, res, next) => {
 
 app.post("/api/transactions", async (req, res, next) => {
   try {
+    const user = await resolveUserId(req);
     const amount = parseAmountInput(req.body?.amount);
     const description = String(req.body?.description || "").trim().replace(/\s+/g, " ");
     const category = String(req.body?.category || "");
     const spentOn = String(req.body?.spentOn || "");
-    if (!amount || !description || description.length > 180 || !await categoryExists(category) || !/^\d{4}-\d{2}-\d{2}$/.test(spentOn)) {
+    if (!amount || !description || description.length > 180 || !await categoryExists(user.id, category) || !/^\d{4}-\d{2}-\d{2}$/.test(spentOn)) {
       return res.status(400).json({ error: "Amount, note, category, and date are required." });
     }
-    const summaries = await monthSummaries();
+    const summaries = await monthSummaries(user.id);
     const openMonth = summaries[0]?.month || null;
     const pastMonth = summaries.find((item) => item.month !== openMonth)?.month || null;
     const targetMonth = spentOn.slice(0, 7);
     if (openMonth && targetMonth < openMonth && targetMonth !== pastMonth) {
       return res.status(400).json({ error: "You can add a line to this month or the past month." });
     }
-    const { rows } = await pool.query("select coalesce(max(sort_order), 0) + 1 as next from transactions");
-    await ensureIncome(spentOn.slice(0, 7));
+    const { rows } = await pool.query(
+      "select coalesce(max(sort_order), 0) + 1 as next from transactions where user_id = $1",
+      [user.id],
+    );
+    await ensureIncome(user.id, spentOn.slice(0, 7));
     await pool.query(
       `insert into transactions
-        (amount, description, category_slug, people, spent_on, weekend, sort_order, fixed)
-       values ($1, $2, $3, $4, $5, $6, $7, $8)`,
-      [amount, description, category, [], spentOn, isWeekendIso(spentOn), rows[0].next, Boolean(req.body?.fixed)],
+        (user_id, amount, description, category_slug, people, spent_on, weekend, sort_order, fixed)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [user.id, amount, description, category, [], spentOn, isWeekendIso(spentOn), rows[0].next, Boolean(req.body?.fixed)],
     );
-    res.status(201).json(await loadMonth(spentOn.slice(0, 7)));
+    res.status(201).json(await loadMonth(user.id, spentOn.slice(0, 7)));
   } catch (error) {
     next(error);
   }
@@ -441,10 +664,11 @@ app.post("/api/transactions", async (req, res, next) => {
 
 app.patch("/api/transactions/:id", async (req, res, next) => {
   try {
+    const user = await resolveUserId(req);
     const id = Number(req.params.id);
     const current = await pool.query(
-      "select to_char(spent_on, 'YYYY-MM-DD') as spent_on from transactions where id = $1",
-      [id],
+      "select to_char(spent_on, 'YYYY-MM-DD') as spent_on from transactions where id = $1 and user_id = $2",
+      [id, user.id],
     );
     if (!current.rows[0]) return res.status(404).json({ error: "That line is gone." });
 
@@ -469,7 +693,7 @@ app.patch("/api/transactions/:id", async (req, res, next) => {
     }
     if (req.body?.category != null) {
       const category = String(req.body.category);
-      if (!await categoryExists(category)) return res.status(400).json({ error: "That category does not exist." });
+      if (!await categoryExists(user.id, category)) return res.status(400).json({ error: "That category does not exist." });
       set("category_slug", category);
     }
     if (req.body?.fixed != null) {
@@ -484,11 +708,15 @@ app.patch("/api/transactions/:id", async (req, res, next) => {
 
     if (fields.length) {
       values.push(id);
-      await pool.query(`update transactions set ${fields.join(", ")} where id = $${values.length}`, values);
+      values.push(user.id);
+      await pool.query(
+        `update transactions set ${fields.join(", ")} where id = $${values.length - 1} and user_id = $${values.length}`,
+        values,
+      );
     }
 
     const monthSource = req.body?.spentOn || current.rows[0].spent_on;
-    res.json(await loadMonth(String(monthSource).slice(0, 7)));
+    res.json(await loadMonth(user.id, String(monthSource).slice(0, 7)));
   } catch (error) {
     next(error);
   }
@@ -496,11 +724,15 @@ app.patch("/api/transactions/:id", async (req, res, next) => {
 
 app.delete("/api/transactions/:id", async (req, res, next) => {
   try {
+    const user = await resolveUserId(req);
     const id = Number(req.params.id);
-    const current = await pool.query("select to_char(spent_on, 'YYYY-MM') as month from transactions where id = $1", [id]);
+    const current = await pool.query(
+      "select to_char(spent_on, 'YYYY-MM') as month from transactions where id = $1 and user_id = $2",
+      [id, user.id],
+    );
     if (!current.rows[0]) return res.status(404).json({ error: "That line is gone." });
-    await pool.query("delete from transactions where id = $1", [id]);
-    res.json(await loadMonth(current.rows[0].month));
+    await pool.query("delete from transactions where id = $1 and user_id = $2", [id, user.id]);
+    res.json(await loadMonth(user.id, current.rows[0].month));
   } catch (error) {
     next(error);
   }
@@ -533,7 +765,7 @@ async function waitForDb() {
 
 async function main() {
   await waitForDb();
-  await migrate();
+  await ensureSchema();
   app.listen(port, host, () => {
     console.log(`API on http://${host}:${port}`);
   });
