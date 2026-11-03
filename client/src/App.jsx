@@ -28,7 +28,6 @@ import {
   monthDayBounds,
   monthPace,
   parseMoney,
-  shiftMonth,
   todayIso,
 } from "./format.js";
 
@@ -112,28 +111,31 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (data) setPageLoading(false);
+  }, [data]);
+
+  useEffect(() => {
     if (screen !== "app" || !userId) return undefined;
     let cancelled = false;
     setPageLoading(true);
     getBootstrap(month)
       .then((payload) => {
-        if (!cancelled) {
-          setData(payload);
-          setError("");
-          if (!month && payload.month) setMonth(payload.month);
-          setPageLoading(false);
-        }
+        if (cancelled) return;
+        setData(payload);
+        setError("");
+        if (!month && payload.month) setMonth(payload.month);
       })
       .catch((err) => {
-        if (!cancelled) {
-          setError(err.message);
-          setPageLoading(false);
-          if (/pick a user|user is gone/i.test(err.message)) {
-            setStoredUserId(null);
-            setUserId(null);
-            setScreen(users?.length ? "pick" : "start");
-          }
+        if (cancelled) return;
+        setError(err.message);
+        if (/pick a user|user is gone/i.test(err.message)) {
+          setStoredUserId(null);
+          setUserId(null);
+          setScreen(users?.length ? "pick" : "start");
         }
+      })
+      .finally(() => {
+        if (!cancelled) setPageLoading(false);
       });
     return () => {
       cancelled = true;
@@ -261,10 +263,6 @@ export default function App() {
     if (target === "open" && data) {
       const todayMonth = todayIso().slice(0, 7);
       if (todayMonth > data.openMonth) {
-        const ok = window.confirm(
-          `This line starts ${formatMonth(todayMonth)}. ${formatMonth(data.openMonth)} moves to past months, and you can open it from the list.`,
-        );
-        if (!ok) return;
         try {
           const payload = await openNextMonth();
           clearFilters();
@@ -283,32 +281,29 @@ export default function App() {
     setAddTarget(target);
   }
 
-  async function onNewMonth() {
-    if (!data) return;
+  useEffect(() => {
+    if (!data || data.closed || screen !== "app") return undefined;
     const todayMonth = todayIso().slice(0, 7);
-    const advancing =
-      todayMonth <= data.openMonth && data.count > 0 && !data.closed;
-    const target = advancing
-      ? shiftMonth(data.openMonth, 1)
-      : todayMonth > data.openMonth
-        ? todayMonth
-        : data.openMonth;
-    if (advancing || todayMonth > data.openMonth) {
-      const ok = window.confirm(
-        `${formatMonth(data.openMonth)} moves to past months. ${formatMonth(target)} starts empty, with the same net until you change it.`,
-      );
-      if (!ok) return;
-    }
-    try {
-      const payload = await openNextMonth(advancing);
-      clearFilters();
-      setAddTarget(null);
-      applyPayload(payload);
-      setError("");
-    } catch (err) {
-      setError(err.message);
-    }
-  }
+    if (todayMonth <= data.openMonth) return undefined;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const payload = await openNextMonth();
+        if (cancelled) return;
+        clearFilters();
+        setAddTarget(null);
+        applyPayload(payload);
+        setError("");
+      } catch (err) {
+        if (!cancelled) setError(err.message);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [data, screen]);
 
   if (screen === "boot") {
     return (
@@ -436,11 +431,16 @@ export default function App() {
             >
               This month
             </button>
-          ) : data && data.count > 0 ? (
-            <button type="button" className="btn" onClick={onNewMonth}>
-              New month
-            </button>
           ) : null}
+          {data && (!data.closed || data.month === data.pastMonth) && (
+            <button
+              type="button"
+              className="btn primary add-expense-top"
+              onClick={() => startAdd(data.closed ? "past" : "open")}
+            >
+              {addTarget ? "Close" : "Add expense"}
+            </button>
+          )}
         </div>
       </header>
 
@@ -597,7 +597,7 @@ export default function App() {
                   {(!data.closed || data.month === data.pastMonth) && (
                     <button
                       type="button"
-                      className="btn primary"
+                      className="btn primary add-expense-ledger"
                       onClick={() => startAdd(data.closed ? "past" : "open")}
                     >
                       {addTarget ? "Close" : "Add expense"}
