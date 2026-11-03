@@ -1,6 +1,7 @@
 services:
   db:
     image: postgres:16-alpine
+    profiles: ["local-db"]
     environment:
       POSTGRES_USER: finance
       POSTGRES_PASSWORD: finance
@@ -21,13 +22,11 @@ services:
     image: finacne-app:local
     ports:
       - "8080:8080"
+    env_file:
+      - .env
     environment:
-      DATABASE_URL: postgres://finance:finance@db:5432/finance
       HOST: 0.0.0.0
       PORT: "8080"
-    depends_on:
-      db:
-        condition: service_healthy
     restart: unless-stopped
 
 volumes:
