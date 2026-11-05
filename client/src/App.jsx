@@ -47,6 +47,199 @@ function avatarColor(id) {
   return AVATAR_COLORS[(Number(id) || 0) % AVATAR_COLORS.length];
 }
 
+const DEFAULT_HERO_PREFS = {
+  showNetLine: true,
+  showCarry: true,
+  showBar: true,
+  showSpentLine: true,
+  showBreakdown: true,
+  showEditLinks: true,
+};
+
+const HERO_PREF_OPTIONS = [
+  { key: "showNetLine", label: "Income line", hint: "of X income" },
+  { key: "showCarry", label: "Carry & money in", hint: "Extra money still on hand" },
+  { key: "showBar", label: "Spend bar", hint: "How much of the income is used" },
+  { key: "showSpentLine", label: "Spent summary", hint: "Total spent across lines" },
+  { key: "showBreakdown", label: "Breakdown", hint: "Day to day, people, fixed" },
+  { key: "showEditLinks", label: "Money in", hint: "Add money in on the Home card" },
+];
+
+const DEFAULT_SITE_TITLE = "Added money";
+
+function siteEntriesKey(userId, month) {
+  return `finance-site-entries:${userId || "anon"}:${month || ""}`;
+}
+
+function normalizeSiteEntry(entry, month) {
+  return {
+    ...entry,
+    title: entry.title || DEFAULT_SITE_TITLE,
+    amount: Number(entry.amount) || 0,
+    date: entry.date || defaultDateInMonth(month),
+  };
+}
+
+function readSiteEntries(userId, month, fallbackAmount = 0) {
+  try {
+    const raw = localStorage.getItem(siteEntriesKey(userId, month));
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed.map((entry) => normalizeSiteEntry(entry, month));
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  if (fallbackAmount > 0) {
+    const seeded = [
+      normalizeSiteEntry(
+        {
+          id: "seed",
+          title: DEFAULT_SITE_TITLE,
+          amount: fallbackAmount,
+          date: defaultDateInMonth(month),
+        },
+        month,
+      ),
+    ];
+    writeSiteEntries(userId, month, seeded);
+    return seeded;
+  }
+  return [];
+}
+
+function writeSiteEntries(userId, month, entries) {
+  localStorage.setItem(siteEntriesKey(userId, month), JSON.stringify(entries));
+}
+
+function siteEntriesTotal(entries) {
+  return entries.reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
+}
+
+function addSiteEntry(userId, month, title, amount, date, fallbackAmount = 0) {
+  const entries = readSiteEntries(userId, month, fallbackAmount);
+  const next = [
+    ...entries,
+    normalizeSiteEntry(
+      {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        title: (title || "").trim() || DEFAULT_SITE_TITLE,
+        amount,
+        date: date || defaultDateInMonth(month),
+      },
+      month,
+    ),
+  ];
+  writeSiteEntries(userId, month, next);
+  return next;
+}
+
+function updateSiteEntry(userId, month, entryId, patch, fallbackAmount = 0) {
+  const entries = readSiteEntries(userId, month, fallbackAmount);
+  const next = entries.map((entry) =>
+    entry.id === entryId
+      ? normalizeSiteEntry(
+          {
+            ...entry,
+            ...patch,
+            title:
+              patch.title != null
+                ? (patch.title || "").trim() || DEFAULT_SITE_TITLE
+                : entry.title,
+          },
+          month,
+        )
+      : entry,
+  );
+  writeSiteEntries(userId, month, next);
+  return next;
+}
+
+function deleteSiteEntry(userId, month, entryId, fallbackAmount = 0) {
+  const entries = readSiteEntries(userId, month, fallbackAmount);
+  const next = entries.filter((entry) => entry.id !== entryId);
+  writeSiteEntries(userId, month, next);
+  return next;
+}
+
+function PenIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+      <path
+        fill="currentColor"
+        d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"
+      />
+    </svg>
+  );
+}
+
+const GREET_FLAG_KEY = "finance-show-hello";
+
+function markShowHello() {
+  try {
+    sessionStorage.setItem(GREET_FLAG_KEY, "1");
+  } catch {
+    /* ignore */
+  }
+}
+
+function consumeShowHello() {
+  try {
+    const show = sessionStorage.getItem(GREET_FLAG_KEY) === "1";
+    if (show) sessionStorage.removeItem(GREET_FLAG_KEY);
+    return show;
+  } catch {
+    return false;
+  }
+}
+
+function clearShowHello() {
+  try {
+    sessionStorage.removeItem(GREET_FLAG_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+function heroPrefsKey(userId) {
+  return `finance-hero-prefs:${userId || "anon"}`;
+}
+
+function readHeroPrefs(userId) {
+  try {
+    const raw = localStorage.getItem(heroPrefsKey(userId));
+    if (!raw) return { ...DEFAULT_HERO_PREFS };
+    return { ...DEFAULT_HERO_PREFS, ...JSON.parse(raw) };
+  } catch {
+    return { ...DEFAULT_HERO_PREFS };
+  }
+}
+
+function writeHeroPrefs(userId, prefs) {
+  localStorage.setItem(heroPrefsKey(userId), JSON.stringify(prefs));
+}
+
+function TabTitle({ title, copy }) {
+  return (
+    <header className="tab-hero" key={title}>
+      <h1 className="tab-title">
+        {title.split(" ").map((word, index) => (
+          <span
+            key={`${title}-${word}`}
+            className="auth-word"
+            style={{ animationDelay: `${120 + index * 90}ms` }}
+          >
+            {word}
+          </span>
+        ))}
+      </h1>
+      {copy ? <p className="hint tab-copy">{copy}</p> : null}
+    </header>
+  );
+}
+
 export default function App() {
   const hexclave = useHexclaveApp();
   // Prefer getUser over useUser so auth never re-suspends the tree (that
@@ -64,13 +257,16 @@ export default function App() {
   const [query, setQuery] = useState("");
   const [addTarget, setAddTarget] = useState(null);
   const [editingId, setEditingId] = useState(null);
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [scanOpen, setScanOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [loadId, setLoadId] = useState(0);
   const [welcomeName, setWelcomeName] = useState("");
   const [pageLoading, setPageLoading] = useState(true);
   const [authBusy, setAuthBusy] = useState(false);
+  const [appTab, setAppTab] = useState("home");
+  const [heroPrefs, setHeroPrefs] = useState(() =>
+    readHeroPrefs(getStoredUserId()),
+  );
 
   const currentUser =
     users?.find((user) => user.id === userId) || data?.user || null;
@@ -106,6 +302,7 @@ export default function App() {
       setMonth("");
       setScreen("auth");
       setPageLoading(false);
+      markShowHello();
       return undefined;
     }
 
@@ -119,7 +316,13 @@ export default function App() {
         if (ledgerUser) {
           setStoredUserId(ledgerUser.id);
           setUserId(ledgerUser.id);
-          setScreen("app");
+          // Sign-in redirects reload the page — sessionStorage keeps the greet flag.
+          if (consumeShowHello()) {
+            setWelcomeName(ledgerUser.name);
+            setScreen("hello");
+          } else {
+            setScreen("app");
+          }
         } else {
           setStoredUserId(null);
           setUserId(null);
@@ -148,7 +351,8 @@ export default function App() {
   }, [data]);
 
   useEffect(() => {
-    if (screen !== "app" || !userId) return undefined;
+    // Prefetch while Hello plays so the ledger is ready when it finishes.
+    if ((screen !== "app" && screen !== "hello") || !userId) return undefined;
 
     const current = dataRef.current;
     const forceReload = loadId !== fetchedLoadIdRef.current;
@@ -168,7 +372,8 @@ export default function App() {
 
     let cancelled = false;
     // Keep stale rows on screen — only show the top bar when we have nothing yet.
-    if (!current) setPageLoading(true);
+    // During hello the splash covers the page, so skip the loading bar flash.
+    if (!current && screen === "app") setPageLoading(true);
     getBootstrap(month)
       .then((payload) => {
         if (cancelled) return;
@@ -214,13 +419,21 @@ export default function App() {
     setData(payload.ledger);
     setUserMenuOpen(false);
     setError("");
+    clearShowHello();
     setWelcomeName(payload.user.name);
     setScreen("hello");
+  }
+
+  function finishWelcome() {
+    setWelcomeName("");
+    clearShowHello();
+    setScreen("app");
   }
 
   async function onSignIn() {
     setAuthBusy(true);
     setError("");
+    markShowHello();
     try {
       await hexclave.redirectToSignIn();
     } catch (err) {
@@ -232,6 +445,7 @@ export default function App() {
   async function onSignUp() {
     setAuthBusy(true);
     setError("");
+    markShowHello();
     try {
       await hexclave.redirectToSignUp();
     } catch (err) {
@@ -245,6 +459,7 @@ export default function App() {
     setError("");
     try {
       await authUser.signOut();
+      markShowHello();
       setAuthUser(null);
       setStoredUserId(null);
       setUserId(null);
@@ -252,13 +467,24 @@ export default function App() {
       setData(null);
       setMonth("");
       setUserMenuOpen(false);
-      setSettingsOpen(false);
       setScreen("auth");
     } catch (err) {
       setError(err.humanReadableMessage || err.message || "Could not sign out.");
     } finally {
       setAuthBusy(false);
     }
+  }
+
+  useEffect(() => {
+    setHeroPrefs(readHeroPrefs(userId));
+  }, [userId]);
+
+  function updateHeroPref(key, value) {
+    setHeroPrefs((current) => {
+      const next = { ...current, [key]: value };
+      writeHeroPrefs(userId, next);
+      return next;
+    });
   }
 
   async function onAccountSettings() {
@@ -273,11 +499,6 @@ export default function App() {
       );
       setAuthBusy(false);
     }
-  }
-
-  function finishWelcome() {
-    setWelcomeName("");
-    setScreen("app");
   }
 
   const filtered = useMemo(() => {
@@ -313,9 +534,39 @@ export default function App() {
     return next;
   }, [filtered]);
 
-  const visibleSpent = filtered.reduce((sum, tx) => sum + tx.amount, 0);
   const filtersOn =
     category !== "all" || person !== "all" || query.trim() !== "";
+
+  const siteEntries = useMemo(() => {
+    if (!data) return [];
+    return readSiteEntries(userId, data.month, data.site || 0);
+  }, [data, userId, data?.month, data?.site]);
+
+  const ledgerDays = useMemo(() => {
+    const byDate = new Map();
+    for (const group of groups) {
+      byDate.set(group.date, {
+        date: group.date,
+        items: group.items,
+        moneyIn: [],
+        total: group.total,
+      });
+    }
+    if (!filtersOn) {
+      for (const entry of siteEntries) {
+        const date = entry.date || defaultDateInMonth(data?.month);
+        let day = byDate.get(date);
+        if (!day) {
+          day = { date, items: [], moneyIn: [], total: 0 };
+          byDate.set(date, day);
+        }
+        day.moneyIn.push(entry);
+      }
+    }
+    return [...byDate.values()].sort((a, b) => b.date.localeCompare(a.date));
+  }, [groups, siteEntries, filtersOn, data?.month]);
+
+  const visibleSpent = filtered.reduce((sum, tx) => sum + tx.amount, 0);
 
   async function onFixedChange(tx, fixed) {
     try {
@@ -413,15 +664,8 @@ export default function App() {
     };
   }, [screen, openMonthKey]);
 
-  if (screen === "boot") {
-    return (
-      <div className="boot-screen">
-        <LoadingBar active />
-        <p className="eyebrow boot-eyebrow">Net</p>
-        <p className="boot-title">Opening your ledger</p>
-        <p className="boot-copy">One moment…</p>
-      </div>
-    );
+  if (screen === "boot" || (screen === "app" && !data && !error)) {
+    return <BootScreen />;
   }
 
   if (screen === "auth") {
@@ -475,18 +719,14 @@ export default function App() {
   }
 
   if (!data && !error) {
-    return (
-      <div className="boot-screen">
-        <LoadingBar active />
-        <p className="eyebrow boot-eyebrow">Net</p>
-        <p className="boot-title">Reading your ledger</p>
-        <p className="boot-copy">Pulling this month…</p>
-      </div>
-    );
+    return <BootScreen />;
   }
 
+  const canAdd =
+    data && (!data.closed || data.month === data.pastMonth);
+
   return (
-    <div className="page">
+    <div className="page page-app">
       <LoadingBar active={pageLoading} />
       <header className="top">
         <div className="top-left">
@@ -499,10 +739,6 @@ export default function App() {
               onToggle={() => setUserMenuOpen((value) => !value)}
               onClose={() => setUserMenuOpen(false)}
               onAccountSettings={onAccountSettings}
-              onLedgerSettings={() => {
-                setUserMenuOpen(false);
-                setSettingsOpen(true);
-              }}
               onSignOut={onSignOut}
             />
           )}
@@ -511,8 +747,62 @@ export default function App() {
             <small>{currentUser?.name ? currentUser.name : "monthly spending"}</small>
           </div>
         </div>
+
+        <nav className="app-nav" aria-label="Main">
+          {[
+            {
+              id: "home",
+              label: "Home",
+              icon: (
+                <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+                  <path
+                    fill="currentColor"
+                    d="M12 3.2 3.5 10.4V21h6.2v-6.2h4.6V21h6.2V10.4L12 3.2zm0 2.5 6.3 5.3V19h-2.6v-6.2H8.3V19H5.7v-8L12 5.7z"
+                  />
+                </svg>
+              ),
+            },
+            {
+              id: "expenses",
+              label: "Expenses",
+              icon: (
+                <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+                  <path
+                    fill="currentColor"
+                    d="M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zm0 2v14h14V5H5zm3 3h8v2H8V8zm0 4h8v2H8v-2zm0 4h5v2H8v-2z"
+                  />
+                </svg>
+              ),
+            },
+            {
+              id: "config",
+              label: "Config",
+              icon: (
+                <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+                  <path
+                    fill="currentColor"
+                    d="M19.14 12.94c.04-.31.06-.63.06-.94s-.02-.63-.06-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.2 7.2 0 0 0-1.63-.94l-.36-2.54a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.5.42l-.36 2.54c-.59.22-1.13.54-1.63.94l-2.39-.96a.5.5 0 0 0-.6.22L2.71 8.84a.5.5 0 0 0 .12.64l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32c.13.23.4.32.64.22l2.39-.96c.5.4 1.04.72 1.63.94l.36 2.54c.05.24.26.42.5.42h3.84c.24 0 .45-.18.5-.42l.36-2.54c.59-.22 1.13-.54 1.63-.94l2.39.96c.23.1.51 0 .64-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58zM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7z"
+                  />
+                </svg>
+              ),
+            },
+          ].map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              className={appTab === tab.id ? "app-nav-item on" : "app-nav-item"}
+              aria-label={tab.label}
+              aria-current={appTab === tab.id ? "page" : undefined}
+              onClick={() => setAppTab(tab.id)}
+            >
+              <span className="app-nav-icon">{tab.icon}</span>
+              <span className="app-nav-label">{tab.label}</span>
+            </button>
+          ))}
+        </nav>
+
         <div className="top-actions">
-          {data && (!data.closed || data.month === data.pastMonth) && (
+          {canAdd && (
             <button
               type="button"
               className="icon-btn"
@@ -544,13 +834,14 @@ export default function App() {
               This month
             </button>
           ) : null}
-          {data && (!data.closed || data.month === data.pastMonth) && (
+          {canAdd && appTab !== "config" && (
             <button
               type="button"
               className="btn primary add-expense-top"
+              aria-label={addTarget ? "Close" : "Add expense"}
               onClick={() => startAdd(data.closed ? "past" : "open")}
             >
-              {addTarget ? "Close" : "Add expense"}
+              {addTarget ? "×" : "+"}
             </button>
           )}
         </div>
@@ -571,12 +862,17 @@ export default function App() {
         </p>
       )}
 
-      {data && (
-        <>
-          <Hero data={data} onSaved={applyPayload} onError={setError} />
-
+      {data && appTab === "home" && (
+        <section className="tab-panel">
+          <TabTitle title="Home" />
+          <Hero
+            data={data}
+            userId={userId}
+            prefs={heroPrefs}
+            onSaved={applyPayload}
+            onError={setError}
+          />
           <MonthPulse data={data} />
-
           {data.insights.length > 0 && (
             <ul className="insights">
               {data.insights.map((line) => (
@@ -584,7 +880,47 @@ export default function App() {
               ))}
             </ul>
           )}
+          <div className="home-aside">
+            <div className="split-stats">
+              <div>
+                <span>Weekdays</span>
+                <strong className="figure">{lek(data.weekday)}</strong>
+              </div>
+              <div>
+                <span>Weekends</span>
+                <strong className="figure">{lek(data.weekend)}</strong>
+              </div>
+            </div>
+            <CategoryPie
+              userId={userId}
+              categories={data.categories}
+              spent={data.spent}
+              active={category}
+              onSelect={(slug) =>
+                setCategory((current) => (current === slug ? "all" : slug))
+              }
+            />
+          </div>
+          {canAdd && (
+            <div className="home-add">
+              <button
+                type="button"
+                className="btn primary"
+                onClick={() => startAdd(data.closed ? "past" : "open")}
+              >
+                {addTarget ? "Close" : "Add expense"}
+              </button>
+            </div>
+          )}
+        </section>
+      )}
 
+      {data && appTab === "expenses" && (
+        <section className="tab-panel">
+          <TabTitle
+            title="Expenses"
+            copy="Every line this month. Filter, search, or open a past month."
+          />
           <div className="layout">
             <aside className="rail">
               <MonthList data={data} onOpen={showMonth} />
@@ -625,7 +961,7 @@ export default function App() {
                             <small>{item.count}</small>
                           </span>
                           <span className="cat-amt">
-                            {lek(item.total)}
+                            <span className="figure">{lek(item.total)}</span>
                             {data.spent > 0 && (
                               <small>{shareOf(item.total, data.spent)}</small>
                             )}
@@ -659,34 +995,13 @@ export default function App() {
                           onClick={() => setPerson(active ? "all" : item.name)}
                         >
                           <span>{item.name}</span>
-                          <strong>{lek(item.total)}</strong>
+                          <strong className="figure">{lek(item.total)}</strong>
                         </button>
                       );
                     })}
                   </div>
                 </div>
               )}
-
-              <div className="split-stats">
-                <div>
-                  <span>Weekdays</span>
-                  <strong>{lek(data.weekday)}</strong>
-                </div>
-                <div>
-                  <span>Weekends</span>
-                  <strong>{lek(data.weekend)}</strong>
-                </div>
-              </div>
-
-              <CategoryPie
-                userId={userId}
-                categories={data.categories}
-                spent={data.spent}
-                active={category}
-                onSelect={(slug) =>
-                  setCategory((current) => (current === slug ? "all" : slug))
-                }
-              />
             </aside>
 
             <section className="ledger">
@@ -716,7 +1031,7 @@ export default function App() {
                       Clear
                     </button>
                   )}
-                  {(!data.closed || data.month === data.pastMonth) && (
+                  {canAdd && (
                     <button
                       type="button"
                       className="btn primary add-expense-ledger"
@@ -743,7 +1058,7 @@ export default function App() {
                 </p>
               )}
 
-              {groups.length === 0 && (
+              {ledgerDays.length === 0 && (
                 <p className="empty">
                   {data.closed
                     ? "Nothing in this month."
@@ -751,16 +1066,33 @@ export default function App() {
                 </p>
               )}
 
-              {groups.map((group) => (
-                <section key={group.date} className="day-group">
+              {ledgerDays.map((day) => (
+                <section key={day.date} className="day-group">
                   <header className="day">
                     <h3>
-                      {formatDay(group.date)}
-                      {isWeekend(group.date) && <span>weekend</span>}
+                      {formatDay(day.date)}
+                      {isWeekend(day.date) && <span>weekend</span>}
                     </h3>
-                    <strong>{lek(group.total)}</strong>
+                    <strong className="figure">{lek(day.total)}</strong>
                   </header>
-                  {group.items.map((tx) => (
+                  {day.moneyIn.map((entry) => (
+                    <MoneyInRow
+                      key={entry.id}
+                      entry={entry}
+                      userId={userId}
+                      month={data.month}
+                      currentTotal={data.site || 0}
+                      editing={editingId === `money-in:${entry.id}`}
+                      onEdit={() => setEditingId(`money-in:${entry.id}`)}
+                      onCancel={() => setEditingId(null)}
+                      onSaved={(payload) => {
+                        applyPayload(payload);
+                        setEditingId(null);
+                      }}
+                      onError={setError}
+                    />
+                  ))}
+                  {day.items.map((tx) => (
                     <TransactionRow
                       key={tx.id}
                       tx={tx}
@@ -781,13 +1113,46 @@ export default function App() {
               ))}
             </section>
           </div>
-
           <p className="footnote">
             You can correct a date, an amount, or a category on any line.
             Starting a new month clears this page and keeps the old one in Past
             months.
           </p>
-        </>
+        </section>
+      )}
+
+      {data && appTab === "config" && (
+        <section className="tab-panel">
+          <TabTitle
+            title="Config"
+            copy="Tune the home card, rename categories, or remove this ledger."
+          />
+          <ConfigPanel
+            user={currentUser || data.user}
+            categories={data.categories}
+            month={data.month}
+            income={data.income}
+            heroPrefs={heroPrefs}
+            onHeroPref={updateHeroPref}
+            onSaved={(payload) => {
+              applyPayload(payload);
+              setError("");
+            }}
+            onDeleted={async () => {
+              setUsers([]);
+              setStoredUserId(null);
+              setUserId(null);
+              setMonth("");
+              setData(null);
+              setAddTarget(null);
+              setEditingId(null);
+              clearFilters();
+              setError("");
+              await onSignOut();
+            }}
+            onError={setError}
+          />
+        </section>
       )}
 
       {addTarget && data && (
@@ -813,33 +1178,6 @@ export default function App() {
             applyPayload(payload);
             setScanOpen(false);
             setError("");
-          }}
-          onError={setError}
-        />
-      )}
-
-      {settingsOpen && data && (
-        <SettingsModal
-          user={currentUser || data.user}
-          categories={data.categories}
-          month={data.month}
-          onClose={() => setSettingsOpen(false)}
-          onSaved={(payload) => {
-            applyPayload(payload);
-            setError("");
-          }}
-          onDeleted={async () => {
-            setSettingsOpen(false);
-            setUsers([]);
-            setStoredUserId(null);
-            setUserId(null);
-            setMonth("");
-            setData(null);
-            setAddTarget(null);
-            setEditingId(null);
-            clearFilters();
-            setError("");
-            await onSignOut();
           }}
           onError={setError}
         />
@@ -1003,6 +1341,17 @@ function LoadingBar({ active }) {
   );
 }
 
+function BootScreen() {
+  return (
+    <div className="boot-screen">
+      <LoadingBar active />
+      <p className="eyebrow boot-eyebrow">Net</p>
+      <p className="boot-title">Opening your ledger</p>
+      <p className="boot-copy">One moment…</p>
+    </div>
+  );
+}
+
 function HelloScreen({ name, onDone }) {
   const onDoneRef = useRef(onDone);
   onDoneRef.current = onDone;
@@ -1091,6 +1440,7 @@ function StartPage({ mode, defaultName = "", onCreated, onCancel, onSignOut }) {
   const [name, setName] = useState(defaultName);
   const [net, setNet] = useState("");
   const [categories, setCategories] = useState([]);
+  const [editingSlug, setEditingSlug] = useState("");
   const [adding, setAdding] = useState("");
   const [saving, setSaving] = useState(false);
   const [localError, setLocalError] = useState("");
@@ -1130,7 +1480,7 @@ function StartPage({ mode, defaultName = "", onCreated, onCancel, onSignOut }) {
     event.preventDefault();
     const amount = Number(String(net).replace(/\s/g, ""));
     if (!Number.isInteger(amount) || amount < 0) {
-      setLocalError("Enter the net as a whole number.");
+      setLocalError("Enter the income as a whole number.");
       return;
     }
     go(2);
@@ -1202,10 +1552,10 @@ function StartPage({ mode, defaultName = "", onCreated, onCancel, onSignOut }) {
     }
   }
 
-  const titles = ["Your name", "Your net", "Your categories"];
+  const titles = ["Your name", "Your income", "Your categories"];
   const hints = [
     "This is how you’ll show up on your ledger.",
-    "How much net do you start this month with?",
+    "How much income do you start this month with?",
     "These start as the defaults. Rename any, or add your own.",
   ];
 
@@ -1263,12 +1613,12 @@ function StartPage({ mode, defaultName = "", onCreated, onCancel, onSignOut }) {
         {step === 1 && (
           <form className="start-form" onSubmit={onNetNext}>
             <label>
-              Net amount
+              Income amount
               <input
                 value={net}
                 autoFocus
                 inputMode="numeric"
-                placeholder="Your net"
+                placeholder="Your income"
                 onChange={(event) => setNet(event.target.value)}
               />
             </label>
@@ -1290,27 +1640,69 @@ function StartPage({ mode, defaultName = "", onCreated, onCancel, onSignOut }) {
 
         {step === 2 && (
           <div className="start-form">
-            <div className="start-cat-list">
-              {categories.map((item) => (
-                <label key={item.slug} className="start-cat">
-                  <input
-                    aria-label={`Name for ${item.slug}`}
-                    value={item.name}
-                    onChange={(event) =>
-                      renameCategoryDraft(item.slug, event.target.value)
+            <div className="config-cat-grid start-cat-grid">
+              {categories.map((item, index) => {
+                const editing = editingSlug === item.slug;
+                return (
+                  <div
+                    className={
+                      editing ? "config-cat-card editing" : "config-cat-card"
                     }
-                  />
-                </label>
-              ))}
+                    key={item.slug}
+                    style={{ animationDelay: `${index * 40}ms` }}
+                  >
+                    <span
+                      className="swatch"
+                      style={{ background: item.color }}
+                    />
+                    {editing ? (
+                      <input
+                        aria-label={`Name for ${item.name}`}
+                        value={item.name}
+                        autoFocus
+                        onChange={(event) =>
+                          renameCategoryDraft(item.slug, event.target.value)
+                        }
+                      />
+                    ) : (
+                      <strong className="config-cat-name">{item.name}</strong>
+                    )}
+                    <div className="config-cat-actions">
+                      {editing ? (
+                        <button
+                          className="btn"
+                          type="button"
+                          disabled={!item.name.trim()}
+                          onClick={() => setEditingSlug("")}
+                        >
+                          Save
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          className="icon-btn pen-btn"
+                          aria-label={`Edit ${item.name}`}
+                          onClick={() => setEditingSlug(item.slug)}
+                        >
+                          <PenIcon />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
-            <form className="start-cat-add" onSubmit={addCategoryDraft}>
+            <form
+              className="settings-row add-row config-cat-add"
+              onSubmit={addCategoryDraft}
+            >
               <input
                 aria-label="New category"
                 placeholder="New category"
                 value={adding}
                 onChange={(event) => setAdding(event.target.value)}
               />
-              <button className="btn" type="submit">
+              <button className="btn primary" type="submit">
                 Add
               </button>
             </form>
@@ -1347,7 +1739,6 @@ function UserMenu({
   onToggle,
   onClose,
   onAccountSettings,
-  onLedgerSettings,
   onSignOut,
 }) {
   useEffect(() => {
@@ -1409,23 +1800,6 @@ function UserMenu({
             </span>
             Account settings
           </button>
-          <button
-            type="button"
-            className="user-menu-item"
-            role="menuitem"
-            disabled={busy}
-            onClick={onLedgerSettings}
-          >
-            <span className="user-menu-icon" aria-hidden="true">
-              <svg viewBox="0 0 24 24" width="16" height="16">
-                <path
-                  fill="currentColor"
-                  d="M19.14 12.94c.04-.31.06-.63.06-.94s-.02-.63-.06-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.2 7.2 0 0 0-1.63-.94l-.36-2.54a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.5.42l-.36 2.54c-.59.22-1.13.54-1.63.94l-2.39-.96a.5.5 0 0 0-.6.22L2.71 8.84a.5.5 0 0 0 .12.64l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32c.13.23.4.32.64.22l2.39-.96c.5.4 1.04.72 1.63.94l.36 2.54c.05.24.26.42.5.42h3.84c.24 0 .45-.18.5-.42l.36-2.54c.59-.22 1.13-.54 1.63-.94l2.39.96c.23.1.51 0 .64-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58zM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7z"
-                />
-              </svg>
-            </span>
-            Ledger settings
-          </button>
           <div className="user-menu-divider" />
           <button
             type="button"
@@ -1474,38 +1848,38 @@ function MonthPulse({ data }) {
             <>
               <div>
                 <dt>Average per day</dt>
-                <dd>{lek(pace.avg)}</dd>
+                <dd className="figure">{lek(pace.avg)}</dd>
               </div>
               <div>
                 <dt>Days</dt>
-                <dd>{pace.length}</dd>
+                <dd className="figure">{pace.length}</dd>
               </div>
               <div>
                 <dt>Left at the end</dt>
-                <dd>{lek(data.remaining)}</dd>
+                <dd className="figure">{lek(data.remaining)}</dd>
               </div>
               <div>
                 <dt>Lines</dt>
-                <dd>{data.count}</dd>
+                <dd className="figure">{data.count}</dd>
               </div>
             </>
           ) : (
             <>
               <div>
                 <dt>Days left</dt>
-                <dd>{pace.daysLeft}</dd>
+                <dd className="figure">{pace.daysLeft}</dd>
               </div>
               <div>
                 <dt>Safe to spend / day</dt>
-                <dd>{lek(pace.safe)}</dd>
+                <dd className="figure">{lek(pace.safe)}</dd>
               </div>
               <div>
                 <dt>Avg daily spend</dt>
-                <dd>{lek(pace.avg)}</dd>
+                <dd className="figure">{lek(pace.avg)}</dd>
               </div>
               <div>
                 <dt>Runway</dt>
-                <dd>{formatRunway(pace.runway)}</dd>
+                <dd className="figure">{formatRunway(pace.runway)}</dd>
               </div>
             </>
           )}
@@ -1537,7 +1911,7 @@ function BalanceChart({ points, income }) {
   if (points.length === 0) {
     return (
       <p className="empty">
-        The line starts on the first day of the month, from the net.
+        The line starts on the first day of the month, from the income.
       </p>
     );
   }
@@ -1620,55 +1994,43 @@ function BalanceChart({ points, income }) {
   );
 }
 
-function Hero({ data, onSaved, onError }) {
-  const [open, setOpen] = useState(false);
-  const [siteOpen, setSiteOpen] = useState(false);
-  const [value, setValue] = useState(String(data.income));
-  const [siteValue, setSiteValue] = useState(String(data.site || 0));
+function SiteMoneyForm({
+  userId,
+  month,
+  currentTotal = 0,
+  onSaved,
+  onError,
+  onCancel,
+}) {
+  const bounds = monthDayBounds(month);
+  const [title, setTitle] = useState(DEFAULT_SITE_TITLE);
+  const [siteValue, setSiteValue] = useState("");
+  const [spentOn, setSpentOn] = useState(() => defaultDateInMonth(month));
   const [saving, setSaving] = useState(false);
-  const site = data.site || 0;
-  const pool = data.income + site + (data.carried || 0);
-  const ratio = pool > 0 ? Math.min(data.spent / pool, 1) : 0;
-  const remaining = data.remaining;
-
-  useEffect(() => {
-    setValue(String(data.income));
-  }, [data.income]);
-
-  useEffect(() => {
-    setSiteValue(String(data.site || 0));
-  }, [data.site]);
 
   async function onSubmit(event) {
     event.preventDefault();
-    const amount = Number(String(value).replace(/\s/g, ""));
-    if (!Number.isInteger(amount) || amount < 0) {
-      onError("Enter the net as a whole number.");
+    const parsed = Number(String(siteValue).replace(/\s/g, ""));
+    if (!Number.isInteger(parsed) || parsed <= 0) {
+      onError("Enter a money-in amount greater than zero.");
+      return;
+    }
+    if (!title.trim()) {
+      onError("Give this money-in a title.");
       return;
     }
     setSaving(true);
     try {
-      onSaved(await saveIncome(data.month, amount));
-      setOpen(false);
-      onError("");
-    } catch (err) {
-      onError(err.message);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function onSiteSubmit(event) {
-    event.preventDefault();
-    const amount = Number(String(siteValue).replace(/\s/g, ""));
-    if (!Number.isInteger(amount) || amount < 0) {
-      onError("Enter the site money as a whole number.");
-      return;
-    }
-    setSaving(true);
-    try {
-      onSaved(await saveSiteMoney(data.month, amount));
-      setSiteOpen(false);
+      const entries = addSiteEntry(
+        userId,
+        month,
+        title,
+        parsed,
+        spentOn,
+        currentTotal,
+      );
+      const total = siteEntriesTotal(entries);
+      onSaved(await saveSiteMoney(month, total));
       onError("");
     } catch (err) {
       onError(err.message);
@@ -1678,136 +2040,162 @@ function Hero({ data, onSaved, onError }) {
   }
 
   return (
-    <section className="hero">
+    <form className="site-money-form" onSubmit={onSubmit}>
+      <label className="site-money-title">
+        <span>Title</span>
+        <input
+          value={title}
+          placeholder={DEFAULT_SITE_TITLE}
+          autoFocus
+          onChange={(event) => setTitle(event.target.value)}
+        />
+      </label>
+      <label className="site-money-amount">
+        <span>Amount</span>
+        <input
+          value={siteValue}
+          inputMode="numeric"
+          placeholder="5000"
+          onChange={(event) => setSiteValue(event.target.value)}
+        />
+      </label>
+      <label className="site-money-date">
+        <span>Date</span>
+        <input
+          type="date"
+          min={bounds.min}
+          max={bounds.max}
+          value={spentOn}
+          onChange={(event) => setSpentOn(event.target.value)}
+        />
+      </label>
+      <div className="site-money-actions">
+        <button className="btn primary" type="submit" disabled={saving}>
+          {saving ? "Saving…" : "Add"}
+        </button>
+        <button className="btn" type="button" onClick={onCancel}>
+          Cancel
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function Hero({ data, userId, prefs = DEFAULT_HERO_PREFS, onSaved, onError }) {
+  const [siteOpen, setSiteOpen] = useState(false);
+  const site = data.site || 0;
+  const pool = data.income + site + (data.carried || 0);
+  const ratio = pool > 0 ? Math.min(data.spent / pool, 1) : 0;
+  const remaining = data.remaining;
+  const showMoneyIn = prefs.showEditLinks || siteOpen;
+
+  return (
+    <section className={prefs.showBreakdown ? "hero" : "hero hero-solo"}>
       <div>
         <p className="eyebrow">
-          {remaining >= 0 ? "Left" : "Over the net"} · {formatMonth(data.month)}
+          {remaining >= 0 ? "Left" : "Over budget"} · {formatMonth(data.month)}
         </p>
         <p className={remaining >= 0 ? "figure huge" : "figure huge negative"}>
           {lek(Math.abs(remaining))}
         </p>
-        <p className="sub">of {lek(data.income)} net · amounts in lek</p>
-        {site > 0 && (
+        {prefs.showNetLine && (
+          <p className="sub">of {lek(data.income)} income</p>
+        )}
+        {prefs.showCarry && site > 0 && (
           <p className="carry">
-            + {lek(site)} <span>site money</span>
+            + {lek(site)}
+            <span className="carry-sep" aria-hidden="true">
+              ·
+            </span>
+            <span className="carry-label">{DEFAULT_SITE_TITLE}</span>
           </p>
         )}
-        {data.carried > 0 && (
+        {prefs.showCarry && data.carried > 0 && (
           <p className="carry">
             + {lek(data.carried)}
             {data.carriedFrom && (
-              <span>still on hand from {formatMonth(data.carriedFrom)}</span>
+              <>
+                <span className="carry-sep" aria-hidden="true">
+                  ·
+                </span>
+                <span className="carry-label">
+                  still on hand from {formatMonth(data.carriedFrom)}
+                </span>
+              </>
             )}
           </p>
         )}
-        <div
-          className="bar"
-          role="img"
-          aria-label={`${Math.round(ratio * 100)} percent of the net is spent`}
-        >
-          <span style={{ width: `${ratio * 100}%` }} />
-        </div>
-        <p className="sub">
-          {lek(data.spent)} spent across {countLines(data.count)}
-        </p>
-        {data.count === 0 &&
+        {prefs.showBar && (
+          <div
+            className="bar"
+            role="img"
+            aria-label={`${Math.round(ratio * 100)} percent of the income is spent`}
+          >
+            <span style={{ width: `${ratio * 100}%` }} />
+          </div>
+        )}
+        {prefs.showSpentLine && (
+          <p className="sub">
+            {lek(data.spent)} spent across {countLines(data.count)}
+          </p>
+        )}
+        {prefs.showEditLinks &&
+          data.count === 0 &&
           data.income > 0 &&
           data.monthList?.some((item) => !item.open) && (
             <p className="sub">
-              Net copied from the previous month. Change it if this month is
-              different.
+              Income copied from the previous month. Change it in Config if this
+              month is different.
             </p>
           )}
-        <div className="income-actions">
-          {open ? (
-            <form className="income-form" onSubmit={onSubmit}>
-              <label>
-                Net for {formatMonth(data.month)}
-                <input
-                  value={value}
-                  inputMode="numeric"
-                  onChange={(event) => setValue(event.target.value)}
-                />
-              </label>
-              <button className="btn primary" type="submit" disabled={saving}>
-                {saving ? "Saving…" : "Save"}
-              </button>
-              <button
-                className="btn"
-                type="button"
-                onClick={() => setOpen(false)}
-              >
-                Cancel
-              </button>
-            </form>
-          ) : (
+        {showMoneyIn && !siteOpen && prefs.showEditLinks && (
+          <div className="income-actions">
             <button
               type="button"
-              className="texty"
-              onClick={() => {
-                setOpen(true);
-                setSiteOpen(false);
-              }}
+              className="texty money-in-cta"
+              onClick={() => setSiteOpen(true)}
             >
-              Edit net
+              Add money in
             </button>
-          )}
-          {siteOpen ? (
-            <form className="income-form" onSubmit={onSiteSubmit}>
-              <label>
-                Site money for {formatMonth(data.month)}
-                <input
-                  value={siteValue}
-                  inputMode="numeric"
-                  onChange={(event) => setSiteValue(event.target.value)}
-                />
-              </label>
-              <button className="btn primary" type="submit" disabled={saving}>
-                {saving ? "Saving…" : "Save"}
-              </button>
-              <button
-                className="btn"
-                type="button"
-                onClick={() => setSiteOpen(false)}
-              >
-                Cancel
-              </button>
-            </form>
-          ) : (
-            <button
-              type="button"
-              className="texty"
-              onClick={() => {
-                setSiteOpen(true);
-                setOpen(false);
-              }}
-            >
-              {site > 0 ? "Edit site money" : "Got site money? Add it"}
-            </button>
-          )}
-        </div>
+          </div>
+        )}
+        {siteOpen && (
+          <SiteMoneyForm
+            userId={userId}
+            month={data.month}
+            currentTotal={site}
+            onSaved={(payload) => {
+              onSaved(payload);
+              setSiteOpen(false);
+            }}
+            onError={onError}
+            onCancel={() => setSiteOpen(false)}
+          />
+        )}
       </div>
-      <dl className="stats">
-        <div>
-          <dt>Day to day</dt>
-          <dd>{lek(data.dayToDay)}</dd>
-        </div>
-        <div>
-          <dt>Money to people</dt>
-          <dd>{lek(data.peopleTotal)}</dd>
-        </div>
-        <div>
-          <dt>Fixed</dt>
-          <dd>
-            {lek(
-              data.transactions.reduce(
-                (sum, tx) => sum + (tx.fixed ? tx.amount : 0),
-                0,
-              ),
-            )}
-          </dd>
-        </div>
-      </dl>
+      {prefs.showBreakdown && (
+        <dl className="stats">
+          <div>
+            <dt>Day to day</dt>
+            <dd className="figure">{lek(data.dayToDay)}</dd>
+          </div>
+          <div>
+            <dt>Money to people</dt>
+            <dd className="figure">{lek(data.peopleTotal)}</dd>
+          </div>
+          <div>
+            <dt>Fixed</dt>
+            <dd className="figure">
+              {lek(
+                data.transactions.reduce(
+                  (sum, tx) => sum + (tx.fixed ? tx.amount : 0),
+                  0,
+                ),
+              )}
+            </dd>
+          </div>
+        </dl>
+      )}
     </section>
   );
 }
@@ -1840,7 +2228,7 @@ function MonthList({ data, onOpen }) {
                 {formatMonth(item.month)}
                 <small>this month</small>
               </span>
-              <strong>{lek(item.spent)}</strong>
+              <strong className="figure">{lek(item.spent)}</strong>
             </button>
           ))}
         {past.length > 0 && <p className="past-label">Past months</p>}
@@ -1858,7 +2246,7 @@ function MonthList({ data, onOpen }) {
               {formatMonth(item.month)}
               <small>{countLines(item.count)}</small>
             </span>
-            <strong>{lek(item.spent)}</strong>
+            <strong className="figure">{lek(item.spent)}</strong>
           </button>
         ))}
       </div>
@@ -2290,15 +2678,15 @@ function AddForm({ categories, monthKey, onCancel, onSaved, onError }) {
           onChange={(event) => setSpentOn(event.target.value)}
         />
       </label>
-      <label className="fixed-check">
-        <input
-          type="checkbox"
-          checked={fixed}
-          onChange={(event) => setFixed(event.target.checked)}
-        />
-        Fixed payment
-      </label>
       <div className="editor-actions">
+        <label className="fixed-check fixed-check-inline">
+          <input
+            type="checkbox"
+            checked={fixed}
+            onChange={(event) => setFixed(event.target.checked)}
+          />
+          Fixed
+        </label>
         <button className="btn primary" type="submit" disabled={saving}>
           {saving ? "Saving…" : "Add"}
         </button>
@@ -2307,6 +2695,169 @@ function AddForm({ categories, monthKey, onCancel, onSaved, onError }) {
         </button>
       </div>
     </form>
+  );
+}
+
+function MoneyInRow({
+  entry,
+  userId,
+  month,
+  currentTotal,
+  editing,
+  onEdit,
+  onCancel,
+  onSaved,
+  onError,
+}) {
+  const bounds = monthDayBounds(month);
+  const [draft, setDraft] = useState({
+    title: entry.title,
+    amount: String(entry.amount),
+    date: entry.date,
+  });
+  const [saving, setSaving] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  useEffect(() => {
+    setDraft({
+      title: entry.title,
+      amount: String(entry.amount),
+      date: entry.date,
+    });
+  }, [entry.title, entry.amount, entry.date]);
+
+  async function onSubmit(event) {
+    event.preventDefault();
+    const amount = Number(String(draft.amount).replace(/\s/g, ""));
+    if (!Number.isInteger(amount) || amount <= 0) {
+      onError("Enter a money-in amount greater than zero.");
+      return;
+    }
+    if (!draft.title.trim()) {
+      onError("Give this money-in a title.");
+      return;
+    }
+    setSaving(true);
+    try {
+      const entries = updateSiteEntry(
+        userId,
+        month,
+        entry.id,
+        {
+          title: draft.title,
+          amount,
+          date: draft.date,
+        },
+        currentTotal,
+      );
+      onSaved(await saveSiteMoney(month, siteEntriesTotal(entries)));
+      onError("");
+    } catch (err) {
+      onError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function confirmDeleteEntry() {
+    setDeleting(true);
+    try {
+      const entries = deleteSiteEntry(
+        userId,
+        month,
+        entry.id,
+        currentTotal,
+      );
+      onSaved(await saveSiteMoney(month, siteEntriesTotal(entries)));
+      onError("");
+      setConfirmDelete(false);
+    } catch (err) {
+      onError(err.message);
+      setDeleting(false);
+    }
+  }
+
+  return (
+    <article className="row money-in">
+      <div className="row-main">
+        <span className="row-mark money-in-mark" />
+        <div>
+          <h4>{entry.title}</h4>
+          <p className="meta">
+            <span className="tag">money in</span>
+          </p>
+        </div>
+        <div className="row-side">
+          <strong className="figure money-in-amt">+ {lek(entry.amount)}</strong>
+          <button
+            type="button"
+            className="icon-btn pen-btn"
+            aria-label={editing ? "Close editor" : "Edit money in"}
+            onClick={editing ? onCancel : onEdit}
+          >
+            {editing ? "×" : <PenIcon />}
+          </button>
+        </div>
+      </div>
+      {editing && (
+        <form className="editor inner" onSubmit={onSubmit}>
+          <label className="grow">
+            Title
+            <input
+              value={draft.title}
+              onChange={(event) =>
+                setDraft({ ...draft, title: event.target.value })
+              }
+            />
+          </label>
+          <label>
+            Amount
+            <input
+              value={draft.amount}
+              inputMode="numeric"
+              onChange={(event) =>
+                setDraft({ ...draft, amount: event.target.value })
+              }
+            />
+          </label>
+          <label>
+            Date
+            <input
+              type="date"
+              min={bounds.min}
+              max={bounds.max}
+              value={draft.date}
+              onChange={(event) =>
+                setDraft({ ...draft, date: event.target.value })
+              }
+            />
+          </label>
+          <div className="editor-actions">
+            <button className="btn primary" type="submit" disabled={saving}>
+              {saving ? "Saving…" : "Save"}
+            </button>
+            <button
+              className="btn danger"
+              type="button"
+              onClick={() => setConfirmDelete(true)}
+            >
+              Delete
+            </button>
+          </div>
+        </form>
+      )}
+      {confirmDelete && (
+        <ConfirmModal
+          title="Delete money in"
+          message={`Delete ${entry.title}? This cannot be undone.`}
+          confirmLabel={deleting ? "Deleting…" : "Delete"}
+          busy={deleting}
+          onConfirm={confirmDeleteEntry}
+          onCancel={() => setConfirmDelete(false)}
+        />
+      )}
+    </article>
   );
 }
 
@@ -2413,10 +2964,11 @@ function TransactionRow({
           </select>
           <button
             type="button"
-            className="texty"
+            className="icon-btn pen-btn"
+            aria-label={editing ? "Close editor" : "Edit line"}
             onClick={editing ? onCancel : onEdit}
           >
-            {editing ? "Close" : "Edit"}
+            {editing ? "×" : <PenIcon />}
           </button>
         </div>
       </div>
@@ -2451,15 +3003,15 @@ function TransactionRow({
               }
             />
           </label>
-          <label className="fixed-check">
-            <input
-              type="checkbox"
-              checked={Boolean(tx.fixed)}
-              onChange={(event) => onFixed(event.target.checked)}
-            />
-            Fixed payment
-          </label>
           <div className="editor-actions">
+            <label className="fixed-check fixed-check-inline">
+              <input
+                type="checkbox"
+                checked={Boolean(tx.fixed)}
+                onChange={(event) => onFixed(event.target.checked)}
+              />
+              Fixed
+            </label>
             <button className="btn primary" type="submit" disabled={saving}>
               {saving ? "Saving…" : "Save"}
             </button>
@@ -2543,14 +3095,32 @@ function ConfirmModal({
   );
 }
 
-function SettingsModal({ user, categories, month, onClose, onSaved, onDeleted, onError }) {
+function ConfigPanel({
+  user,
+  categories,
+  month,
+  income,
+  heroPrefs,
+  onHeroPref,
+  onSaved,
+  onDeleted,
+  onError,
+}) {
   const [drafts, setDrafts] = useState(() =>
     Object.fromEntries(categories.map((item) => [item.slug, item.name])),
   );
+  const [editingSlug, setEditingSlug] = useState("");
   const [adding, setAdding] = useState("");
   const [savingSlug, setSavingSlug] = useState("");
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [incomeOpen, setIncomeOpen] = useState(false);
+  const [incomeValue, setIncomeValue] = useState(String(income ?? 0));
+  const [incomeSaving, setIncomeSaving] = useState(false);
+
+  useEffect(() => {
+    setIncomeValue(String(income ?? 0));
+  }, [income]);
 
   useEffect(() => {
     setDrafts(
@@ -2567,6 +3137,7 @@ function SettingsModal({ user, categories, month, onClose, onSaved, onDeleted, o
     setSavingSlug(slug);
     try {
       onSaved(await renameCategory(slug, name, month));
+      setEditingSlug("");
       onError("");
     } catch (err) {
       onError(err.message);
@@ -2607,89 +3178,206 @@ function SettingsModal({ user, categories, month, onClose, onSaved, onDeleted, o
     }
   }
 
+  async function onIncomeSubmit(event) {
+    event.preventDefault();
+    const amount = Number(String(incomeValue).replace(/\s/g, ""));
+    if (!Number.isInteger(amount) || amount < 0) {
+      onError("Enter the income as a whole number.");
+      return;
+    }
+    setIncomeSaving(true);
+    try {
+      onSaved(await saveIncome(month, amount));
+      setIncomeOpen(false);
+      onError("");
+    } catch (err) {
+      onError(err.message);
+    } finally {
+      setIncomeSaving(false);
+    }
+  }
+
   const label = user?.name || "this user";
 
   return (
     <>
-      <div className="modal-back" onClick={onClose}>
-        <form
-          className="modal"
-          onClick={(event) => event.stopPropagation()}
-          onSubmit={addCategory}
-        >
-          <h2>Settings</h2>
-          <p>
-            Rename a category, or add one. Fixed payments are marked on the line
-            itself, and they stay out of the average per day.
-          </p>
-          <div className="settings-list">
-            {categories.map((item) => {
-              const dirty = (drafts[item.slug] || "").trim() !== item.name;
-              return (
-                <div className="settings-row" key={item.slug}>
-                  <span className="swatch" style={{ background: item.color }} />
+      <section className="config-block config-enter">
+        <h2>Income</h2>
+        <p className="hint">
+          Monthly income for {formatMonth(month)}. This is the base of your
+          Left card.
+        </p>
+        {incomeOpen ? (
+          <form className="income-form income-form-inline" onSubmit={onIncomeSubmit}>
+            <label>
+              Income amount
+              <input
+                value={incomeValue}
+                inputMode="numeric"
+                autoFocus
+                onChange={(event) => setIncomeValue(event.target.value)}
+              />
+            </label>
+            <button className="btn primary" type="submit" disabled={incomeSaving}>
+              {incomeSaving ? "Saving…" : "Save"}
+            </button>
+            <button
+              className="btn"
+              type="button"
+              onClick={() => {
+                setIncomeOpen(false);
+                setIncomeValue(String(income ?? 0));
+              }}
+            >
+              Cancel
+            </button>
+          </form>
+        ) : (
+          <div className="config-income-row">
+            <strong className="figure config-income-amt">{lek(income || 0)}</strong>
+            <button
+              type="button"
+              className="icon-btn pen-btn"
+              aria-label="Edit income"
+              onClick={() => setIncomeOpen(true)}
+            >
+              <PenIcon />
+            </button>
+          </div>
+        )}
+      </section>
+
+      <section className="config-block config-enter" style={{ animationDelay: "80ms" }}>
+        <h2>Home card</h2>
+        <p className="hint">
+          Choose what stays on the Left card. The big remaining amount always
+          stays.
+        </p>
+        <div className="config-widgets">
+          {HERO_PREF_OPTIONS.map((option, index) => {
+            const on = Boolean(heroPrefs[option.key]);
+            return (
+              <button
+                key={option.key}
+                type="button"
+                className={on ? "config-widget on" : "config-widget"}
+                style={{ animationDelay: `${80 + index * 60}ms` }}
+                aria-pressed={on}
+                onClick={() => onHeroPref(option.key, !on)}
+              >
+                <span className="config-widget-check" aria-hidden="true">
+                  {on ? "✓" : ""}
+                </span>
+                <span className="config-widget-copy">
+                  <strong>{option.label}</strong>
+                  <small>{option.hint}</small>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </section>
+
+      <form
+        className="config-block config-enter"
+        style={{ animationDelay: "200ms" }}
+        onSubmit={addCategory}
+      >
+        <h2>Categories</h2>
+        <p className="hint">
+          Rename a category, or add one. Fixed payments are marked on the line
+          itself, and they stay out of the average per day.
+        </p>
+        <div className="config-cat-grid">
+          {categories.map((item, index) => {
+            const dirty = (drafts[item.slug] || "").trim() !== item.name;
+            const editing = editingSlug === item.slug;
+            return (
+              <div
+                className={editing ? "config-cat-card editing" : "config-cat-card"}
+                key={item.slug}
+                style={{ animationDelay: `${240 + index * 40}ms` }}
+              >
+                <span className="swatch" style={{ background: item.color }} />
+                {editing ? (
                   <input
                     aria-label={`Name for ${item.name}`}
                     value={drafts[item.slug] || ""}
+                    autoFocus
                     onChange={(event) =>
                       setDrafts({ ...drafts, [item.slug]: event.target.value })
                     }
                   />
-                  <button
-                    className="btn"
-                    type="button"
-                    disabled={!dirty || savingSlug === item.slug}
-                    onClick={() => saveName(item.slug)}
-                  >
-                    {savingSlug === item.slug ? "Saving…" : "Save"}
-                  </button>
+                ) : (
+                  <strong className="config-cat-name">{item.name}</strong>
+                )}
+                <div className="config-cat-actions">
+                  {editing ? (
+                    <button
+                      className="btn"
+                      type="button"
+                      disabled={!dirty || savingSlug === item.slug}
+                      onClick={() => saveName(item.slug)}
+                    >
+                      {savingSlug === item.slug ? "…" : "Save"}
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="icon-btn pen-btn"
+                      aria-label={`Edit ${item.name}`}
+                      onClick={() => setEditingSlug(item.slug)}
+                    >
+                      <PenIcon />
+                    </button>
+                  )}
                 </div>
-              );
-            })}
-          </div>
-          <div className="settings-row add-row">
-            <input
-              aria-label="New category"
-              placeholder="New category"
-              value={adding}
-              onChange={(event) => setAdding(event.target.value)}
-            />
-            <button
-              className="btn primary"
-              type="submit"
-              disabled={savingSlug === "new"}
-            >
-              {savingSlug === "new" ? "Adding…" : "Add"}
-            </button>
-          </div>
-          <div className="settings-danger">
-            <div className="settings-danger-copy">
-              <h3>Remove this ledger</h3>
-              <p>
-                Wipe{user?.name ? ` ${user.name}'s` : " this"} net, categories,
-                and every line for good. You’ll land back at sign-in after.
-              </p>
-            </div>
-            <button
-              className="btn danger"
-              type="button"
-              disabled={deleting}
-              onClick={() => setConfirmDelete(true)}
-            >
-              {deleting ? "Deleting…" : "Delete user"}
-            </button>
-          </div>
-          <div className="editor-actions">
-            <button className="btn" type="button" onClick={onClose}>
-              Close
-            </button>
-          </div>
-        </form>
+              </div>
+            );
+          })}
+        </div>
+        <div className="settings-row add-row config-cat-add">
+          <input
+            aria-label="New category"
+            placeholder="New category"
+            value={adding}
+            onChange={(event) => setAdding(event.target.value)}
+          />
+          <button
+            className="btn primary"
+            type="submit"
+            disabled={savingSlug === "new"}
+          >
+            {savingSlug === "new" ? "Adding…" : "Add"}
+          </button>
+        </div>
+      </form>
+
+      <div
+        className="settings-danger config-enter"
+        style={{ animationDelay: "320ms" }}
+      >
+        <div className="settings-danger-copy">
+          <h3>Remove this ledger</h3>
+          <p>
+            Wipe{user?.name ? ` ${user.name}'s` : " this"} income, categories,
+            and every line for good. You’ll land back at sign-in after.
+          </p>
+        </div>
+        <button
+          className="btn danger"
+          type="button"
+          disabled={deleting}
+          onClick={() => setConfirmDelete(true)}
+        >
+          {deleting ? "Deleting…" : "Delete user"}
+        </button>
       </div>
+
       {confirmDelete && (
         <ConfirmModal
           title="Delete user"
-          message={`Delete ${label}? Their net, categories, and lines are removed and cannot be undone.`}
+          message={`Delete ${label}? Their income, categories, and lines are removed and cannot be undone.`}
           confirmLabel={deleting ? "Deleting…" : "Delete"}
           busy={deleting}
           onConfirm={confirmDeleteUser}
