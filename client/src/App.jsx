@@ -67,6 +67,12 @@ const HERO_PREF_OPTIONS = [
 
 const DEFAULT_SITE_TITLE = "Added money";
 
+const SAVINGS_CATEGORY = {
+  slug: "__savings",
+  name: "Savings",
+  color: "#221e18",
+};
+
 function siteEntriesKey(userId, month) {
   return `finance-site-entries:${userId || "anon"}:${month || ""}`;
 }
@@ -161,6 +167,86 @@ function deleteSiteEntry(userId, month, entryId, fallbackAmount = 0) {
   const entries = readSiteEntries(userId, month, fallbackAmount);
   const next = entries.filter((entry) => entry.id !== entryId);
   writeSiteEntries(userId, month, next);
+  return next;
+}
+
+function savingsKey(userId) {
+  return `finance-savings:${userId || "anon"}`;
+}
+
+function normalizeSavingsEntry(entry) {
+  return {
+    id: entry.id,
+    amount: Number(entry.amount) || 0,
+    date: entry.date || "",
+    direction: entry.direction === "out" ? "out" : "in",
+  };
+}
+
+function readSavingsEntries(userId) {
+  try {
+    const raw = localStorage.getItem(savingsKey(userId));
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed.map(normalizeSavingsEntry);
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return [];
+}
+
+function writeSavingsEntries(userId, entries) {
+  localStorage.setItem(savingsKey(userId), JSON.stringify(entries));
+}
+
+function savingsBalance(entries) {
+  return entries.reduce((sum, entry) => {
+    const amount = Number(entry.amount) || 0;
+    return sum + (entry.direction === "out" ? -amount : amount);
+  }, 0);
+}
+
+function savingsMonthFlow(entries, month) {
+  let monthIn = 0;
+  let monthOut = 0;
+  for (const entry of entries) {
+    if (!month || !String(entry.date || "").startsWith(month)) continue;
+    const amount = Number(entry.amount) || 0;
+    if (entry.direction === "out") monthOut += amount;
+    else monthIn += amount;
+  }
+  return { monthIn, monthOut };
+}
+
+function addSavingsTransfer(userId, amount, date, direction, accountLeft = Infinity) {
+  const entries = readSavingsEntries(userId);
+  const balance = savingsBalance(entries);
+  if (!Number.isInteger(amount) || amount <= 0) {
+    throw new Error("Enter a savings amount greater than zero.");
+  }
+  if (direction === "out" && amount > balance) {
+    throw new Error("Not enough in savings.");
+  }
+  if (direction !== "out" && amount > accountLeft) {
+    throw new Error(
+      accountLeft <= 0
+        ? "Nothing left on the account to move into savings."
+        : `You only have ${lek(accountLeft)} left on the account.`,
+    );
+  }
+  const next = [
+    ...entries,
+    normalizeSavingsEntry({
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      amount,
+      date,
+      direction: direction === "out" ? "out" : "in",
+    }),
+  ];
+  writeSavingsEntries(userId, next);
   return next;
 }
 
@@ -263,6 +349,7 @@ export default function App() {
   const [welcomeName, setWelcomeName] = useState("");
   const [authBusy, setAuthBusy] = useState(false);
   const [bootReady, setBootReady] = useState(false);
+  const [savingsTick, setSavingsTick] = useState(0);
   const [appTab, setAppTab] = useState("home");
   const [heroPrefs, setHeroPrefs] = useState(() =>
     readHeroPrefs(getStoredUserId()),
@@ -529,6 +616,51 @@ export default function App() {
     return readSiteEntries(userId, data.month, data.site || 0);
   }, [data, userId, data?.month, data?.site]);
 
+  const savingsEntries = useMemo(
+    () => readSavingsEntries(userId),
+    [userId, savingsTick],
+  );
+
+  const savingsFlow = useMemo(
+    () => savingsMonthFlow(savingsEntries, data?.month),
+    [savingsEntries, data?.month],
+  );
+
+  const savingsTotal = useMemo(
+    () => Math.max(0, savingsBalance(savingsEntries)),
+    [savingsEntries],
+  );
+
+  const savingsMonthDeposits = useMemo(() => {
+    if (!data?.month) return [];
+    return savingsEntries.filter(
+      (entry) =>
+        entry.direction !== "out" &&
+        String(entry.date || "").startsWith(data.month),
+    );
+  }, [savingsEntries, data?.month]);
+
+  const displayCategories = useMemo(() => {
+    if (!data) return [];
+    const base = data.categories.map((item) => ({ ...item }));
+    if (savingsTotal > 0) {
+      base.push({
+        ...SAVINGS_CATEGORY,
+        total: savingsTotal,
+        count: savingsMonthDeposits.length || 1,
+      });
+    }
+    return base;
+  }, [data, savingsTotal, savingsMonthDeposits.length]);
+
+  const categorySpent = (data?.spent || 0) + savingsTotal;
+
+  const effectiveRemaining = data
+    ? data.remaining - savingsFlow.monthIn + savingsFlow.monthOut
+    : 0;
+
+  const savingsOnly = category === SAVINGS_CATEGORY.slug;
+
   const ledgerDays = useMemo(() => {
     const byDate = new Map();
     for (const group of groups) {
@@ -536,24 +668,57 @@ export default function App() {
         date: group.date,
         items: group.items,
         moneyIn: [],
+        savingsIn: [],
         total: group.total,
       });
     }
-    if (!filtersOn) {
-      for (const entry of siteEntries) {
+    const showExtras = !filtersOn || savingsOnly;
+    if (showExtras) {
+      if (!savingsOnly) {
+        for (const entry of siteEntries) {
+          const date = entry.date || defaultDateInMonth(data?.month);
+          let day = byDate.get(date);
+          if (!day) {
+            day = { date, items: [], moneyIn: [], savingsIn: [], total: 0 };
+            byDate.set(date, day);
+          }
+          day.moneyIn.push(entry);
+        }
+      }
+      for (const entry of savingsEntries) {
         const date = entry.date || defaultDateInMonth(data?.month);
+        if (data?.month && !String(date).startsWith(data.month)) continue;
+        if (savingsOnly && entry.direction === "out") continue;
         let day = byDate.get(date);
         if (!day) {
-          day = { date, items: [], moneyIn: [], total: 0 };
+          day = { date, items: [], moneyIn: [], savingsIn: [], total: 0 };
           byDate.set(date, day);
         }
-        day.moneyIn.push(entry);
+        if (entry.direction === "out") {
+          day.moneyIn.push({
+            ...entry,
+            title: "From savings",
+            kind: "savings-out",
+          });
+        } else {
+          day.savingsIn.push(entry);
+          day.total += Number(entry.amount) || 0;
+        }
       }
     }
     return [...byDate.values()].sort((a, b) => b.date.localeCompare(a.date));
-  }, [groups, siteEntries, filtersOn, data?.month]);
+  }, [
+    groups,
+    siteEntries,
+    savingsEntries,
+    filtersOn,
+    savingsOnly,
+    data?.month,
+  ]);
 
-  const visibleSpent = filtered.reduce((sum, tx) => sum + tx.amount, 0);
+  const visibleSpent = savingsOnly
+    ? savingsTotal
+    : filtered.reduce((sum, tx) => sum + tx.amount, 0);
 
   async function onFixedChange(tx, fixed) {
     try {
@@ -857,10 +1022,12 @@ export default function App() {
             data={data}
             userId={userId}
             prefs={heroPrefs}
+            remaining={effectiveRemaining}
+            spentExtra={savingsFlow.monthIn - savingsFlow.monthOut}
             onSaved={applyPayload}
             onError={setError}
           />
-          <MonthPulse data={data} />
+          <MonthPulse data={data} remaining={effectiveRemaining} />
           {data.insights.length > 0 && (
             <ul className="insights">
               {data.insights.map((line) => (
@@ -881,8 +1048,8 @@ export default function App() {
             </div>
             <CategoryPie
               userId={userId}
-              categories={data.categories}
-              spent={data.spent}
+              categories={displayCategories}
+              spent={categorySpent}
               active={category}
               onSelect={(slug) =>
                 setCategory((current) => (current === slug ? "all" : slug))
@@ -919,12 +1086,12 @@ export default function App() {
                   is wrong.
                 </p>
                 <div className="cat-list">
-                  {data.categories
+                  {displayCategories
                     .filter((item) => item.total > 0)
                     .sort((a, b) => b.total - a.total)
                     .map((item) => {
                       const max = Math.max(
-                        ...data.categories.map(
+                        ...displayCategories.map(
                           (categoryItem) => categoryItem.total,
                         ),
                         1,
@@ -950,8 +1117,10 @@ export default function App() {
                           </span>
                           <span className="cat-amt">
                             <span className="figure">{lek(item.total)}</span>
-                            {data.spent > 0 && (
-                              <small>{shareOf(item.total, data.spent)}</small>
+                            {categorySpent > 0 && (
+                              <small>
+                                {shareOf(item.total, categorySpent)}
+                              </small>
                             )}
                           </span>
                           <span className="cat-bar" aria-hidden="true">
@@ -997,9 +1166,11 @@ export default function App() {
                 <div>
                   <h2>Ledger</h2>
                   <p>
-                    {filtersOn
-                      ? `${countLines(filtered.length)} · ${lek(visibleSpent)}`
-                      : `${countLines(data.count)} · ${lek(data.spent)}`}
+                    {savingsOnly
+                      ? `${countLines(savingsMonthDeposits.length)} · ${lek(visibleSpent)}`
+                      : filtersOn
+                        ? `${countLines(filtered.length)} · ${lek(visibleSpent)}`
+                        : `${countLines(data.count)} · ${lek(data.spent)}`}
                   </p>
                 </div>
                 <div className="ledger-tools">
@@ -1063,21 +1234,36 @@ export default function App() {
                     </h3>
                     <strong className="figure">{lek(day.total)}</strong>
                   </header>
-                  {day.moneyIn.map((entry) => (
-                    <MoneyInRow
-                      key={entry.id}
+                  {day.moneyIn.map((entry) =>
+                    entry.kind === "savings-out" ? (
+                      <SavingsLedgerRow
+                        key={`savings-out-${entry.id}`}
+                        entry={entry}
+                        direction="out"
+                      />
+                    ) : (
+                      <MoneyInRow
+                        key={entry.id}
+                        entry={entry}
+                        userId={userId}
+                        month={data.month}
+                        currentTotal={data.site || 0}
+                        editing={editingId === `money-in:${entry.id}`}
+                        onEdit={() => setEditingId(`money-in:${entry.id}`)}
+                        onCancel={() => setEditingId(null)}
+                        onSaved={(payload) => {
+                          applyPayload(payload);
+                          setEditingId(null);
+                        }}
+                        onError={setError}
+                      />
+                    ),
+                  )}
+                  {day.savingsIn.map((entry) => (
+                    <SavingsLedgerRow
+                      key={`savings-in-${entry.id}`}
                       entry={entry}
-                      userId={userId}
-                      month={data.month}
-                      currentTotal={data.site || 0}
-                      editing={editingId === `money-in:${entry.id}`}
-                      onEdit={() => setEditingId(`money-in:${entry.id}`)}
-                      onCancel={() => setEditingId(null)}
-                      onSaved={(payload) => {
-                        applyPayload(payload);
-                        setEditingId(null);
-                      }}
-                      onError={setError}
+                      direction="in"
                     />
                   ))}
                   {day.items.map((tx) => (
@@ -1117,10 +1303,14 @@ export default function App() {
           />
           <ConfigPanel
             user={currentUser || data.user}
+            userId={userId}
             categories={data.categories}
             month={data.month}
             income={data.income}
+            remaining={effectiveRemaining}
             heroPrefs={heroPrefs}
+            savingsEntries={savingsEntries}
+            onSavingsChange={() => setSavingsTick((value) => value + 1)}
             onHeroPref={updateHeroPref}
             onSaved={(payload) => {
               applyPayload(payload);
@@ -1838,16 +2028,17 @@ function UserMenu({
   );
 }
 
-function MonthPulse({ data }) {
+function MonthPulse({ data, remaining, spentExtra = 0 }) {
   const fixedSpent = data.transactions.reduce(
     (sum, tx) => sum + (tx.fixed ? tx.amount : 0),
     0,
   );
+  const left = remaining ?? data.remaining;
   const pace = monthPace(
     data.month,
     data.income + (data.site || 0) + (data.carried || 0),
-    data.spent - fixedSpent,
-    data.remaining,
+    data.spent - fixedSpent + spentExtra,
+    left,
     data.transactions,
   );
   const previous = [...(data.monthList || [])]
@@ -1870,7 +2061,7 @@ function MonthPulse({ data }) {
               </div>
               <div>
                 <dt>Left at the end</dt>
-                <dd className="figure">{lek(data.remaining)}</dd>
+                <dd className="figure">{lek(left)}</dd>
               </div>
               <div>
                 <dt>Lines</dt>
@@ -1900,8 +2091,8 @@ function MonthPulse({ data }) {
         </dl>
         <p className="hint">
           {pace.closed
-            ? "Average per day this month, not counting fixed payments."
-            : "Safe to spend splits what’s left across the days still ahead. Average ignores fixed payments."}
+            ? "Average per day this month, not counting fixed payments or savings moves."
+            : "Safe to spend splits what’s left across the days still ahead. Average ignores fixed payments and savings moves."}
         </p>
         {previous && (
           <p className="hint">
@@ -2095,12 +2286,21 @@ function SiteMoneyForm({
   );
 }
 
-function Hero({ data, userId, prefs = DEFAULT_HERO_PREFS, onSaved, onError }) {
+function Hero({
+  data,
+  userId,
+  prefs = DEFAULT_HERO_PREFS,
+  remaining: remainingProp,
+  spentExtra = 0,
+  onSaved,
+  onError,
+}) {
   const [siteOpen, setSiteOpen] = useState(false);
   const site = data.site || 0;
   const pool = data.income + site + (data.carried || 0);
-  const ratio = pool > 0 ? Math.min(data.spent / pool, 1) : 0;
-  const remaining = data.remaining;
+  const spent = data.spent + spentExtra;
+  const ratio = pool > 0 ? Math.min(spent / pool, 1) : 0;
+  const remaining = remainingProp ?? data.remaining;
   const showMoneyIn = prefs.showEditLinks || siteOpen;
 
   return (
@@ -2150,7 +2350,7 @@ function Hero({ data, userId, prefs = DEFAULT_HERO_PREFS, onSaved, onError }) {
         )}
         {prefs.showSpentLine && (
           <p className="sub">
-            {lek(data.spent)} spent across {countLines(data.count)}
+            {lek(spent)} spent across {countLines(data.count)}
           </p>
         )}
         {prefs.showEditLinks &&
@@ -2725,6 +2925,35 @@ function AddForm({ categories, monthKey, onCancel, onSaved, onError }) {
   );
 }
 
+function SavingsLedgerRow({ entry, direction }) {
+  const isOut = direction === "out";
+  return (
+    <article className={isOut ? "row money-in savings-row" : "row savings-row"}>
+      <div className="row-main">
+        <span
+          className={
+            isOut ? "row-mark money-in-mark" : "row-mark savings-in-mark"
+          }
+        />
+        <div>
+          <h4>{isOut ? "From savings" : "To savings"}</h4>
+          <p className="meta">
+            <span className="tag">{isOut ? "savings out" : "savings in"}</span>
+            <span className="savings-arrow" aria-hidden="true">
+              {isOut ? "←" : "→"}
+            </span>
+          </p>
+        </div>
+        <div className="row-side">
+          <strong className={isOut ? "figure money-in-amt" : "figure"}>
+            {isOut ? `+ ${lek(entry.amount)}` : lek(entry.amount)}
+          </strong>
+        </div>
+      </div>
+    </article>
+  );
+}
+
 function MoneyInRow({
   entry,
   userId,
@@ -3124,15 +3353,20 @@ function ConfirmModal({
 
 function ConfigPanel({
   user,
+  userId,
   categories,
   month,
   income,
+  remaining = 0,
   heroPrefs,
+  savingsEntries = [],
+  onSavingsChange,
   onHeroPref,
   onSaved,
   onDeleted,
   onError,
 }) {
+  const bounds = monthDayBounds(month);
   const [drafts, setDrafts] = useState(() =>
     Object.fromEntries(categories.map((item) => [item.slug, item.name])),
   );
@@ -3144,16 +3378,58 @@ function ConfigPanel({
   const [incomeOpen, setIncomeOpen] = useState(false);
   const [incomeValue, setIncomeValue] = useState(String(income ?? 0));
   const [incomeSaving, setIncomeSaving] = useState(false);
+  const [savingsOpen, setSavingsOpen] = useState(false);
+  const [savingsAmount, setSavingsAmount] = useState("");
+  const [savingsDate, setSavingsDate] = useState(() =>
+    defaultDateInMonth(month),
+  );
+  const [savingsSource, setSavingsSource] = useState("account");
+  const [savingsSaving, setSavingsSaving] = useState(false);
+  const [savingsHistoryOpen, setSavingsHistoryOpen] = useState(false);
+
+  const savingsTotal = savingsBalance(savingsEntries);
+  const accountLeft = Math.max(0, Number(remaining) || 0);
+  const savingsHistory = [...savingsEntries].sort((a, b) =>
+    String(b.date).localeCompare(String(a.date)) ||
+    String(b.id).localeCompare(String(a.id)),
+  );
+  const savingsHistoryLimit = 5;
+  const savingsHistoryVisible = savingsHistoryOpen
+    ? savingsHistory
+    : savingsHistory.slice(0, savingsHistoryLimit);
 
   useEffect(() => {
     setIncomeValue(String(income ?? 0));
   }, [income]);
 
   useEffect(() => {
+    setSavingsDate(defaultDateInMonth(month));
+  }, [month]);
+
+  useEffect(() => {
     setDrafts(
       Object.fromEntries(categories.map((item) => [item.slug, item.name])),
     );
   }, [categories]);
+
+  function onSavingsSubmit(event) {
+    event.preventDefault();
+    const amount = Number(String(savingsAmount).replace(/\s/g, ""));
+    const direction = savingsSource === "savings" ? "out" : "in";
+    setSavingsSaving(true);
+    try {
+      addSavingsTransfer(userId, amount, savingsDate, direction, accountLeft);
+      setSavingsAmount("");
+      setSavingsOpen(false);
+      setSavingsSource("account");
+      onSavingsChange?.();
+      onError("");
+    } catch (err) {
+      onError(err.message);
+    } finally {
+      setSavingsSaving(false);
+    }
+  }
 
   async function saveName(slug) {
     const name = (drafts[slug] || "").trim();
@@ -3271,6 +3547,129 @@ function ConfigPanel({
               <PenIcon />
             </button>
           </div>
+        )}
+      </section>
+
+      <section
+        className="config-block config-enter"
+        style={{ animationDelay: "40ms" }}
+      >
+        <h2>Savings</h2>
+        <p className="hint">
+          Record a move: take from the account into savings, or transfer savings
+          back. Deposits leave Left; transfers back show up as money in.
+        </p>
+        {savingsOpen ? (
+          <form className="savings-form" onSubmit={onSavingsSubmit}>
+            <label>
+              Amount
+              <input
+                value={savingsAmount}
+                inputMode="numeric"
+                placeholder="5000"
+                autoFocus
+                onChange={(event) => setSavingsAmount(event.target.value)}
+              />
+            </label>
+            <label>
+              From
+              <select
+                className={
+                  savingsSource === "savings"
+                    ? "savings-source out"
+                    : "savings-source in"
+                }
+                value={savingsSource}
+                onChange={(event) => setSavingsSource(event.target.value)}
+                aria-label="Move from account or savings"
+              >
+                <option value="account">Account → savings</option>
+                <option value="savings">Savings → account</option>
+              </select>
+            </label>
+            <label>
+              Date
+              <input
+                type="date"
+                min={bounds.min}
+                max={bounds.max}
+                value={savingsDate}
+                onChange={(event) => setSavingsDate(event.target.value)}
+              />
+            </label>
+            <button
+              className="btn primary"
+              type="submit"
+              disabled={savingsSaving}
+            >
+              {savingsSaving ? "Saving…" : "Save"}
+            </button>
+            <button
+              className="btn"
+              type="button"
+              onClick={() => {
+                setSavingsOpen(false);
+                setSavingsAmount("");
+                setSavingsSource("account");
+              }}
+            >
+              Cancel
+            </button>
+          </form>
+        ) : (
+          <div className="config-income-row">
+            <strong className="figure config-income-amt">
+              {lek(savingsTotal)}
+            </strong>
+            <button
+              type="button"
+              className="icon-btn pen-btn"
+              aria-label="Add savings move"
+              onClick={() => setSavingsOpen(true)}
+            >
+              <PenIcon />
+            </button>
+          </div>
+        )}
+        {savingsHistory.length === 0 ? (
+          <p className="hint savings-empty">No savings moves yet.</p>
+        ) : (
+          <>
+            <ul className="savings-list">
+              {savingsHistoryVisible.map((entry) => (
+                <li key={entry.id} className="savings-list-item">
+                  <span className="savings-list-date">
+                    {formatDay(entry.date)}
+                  </span>
+                  <span className="savings-list-flow">
+                    {entry.direction === "out"
+                      ? "Savings → account"
+                      : "Account → savings"}
+                  </span>
+                  <span
+                    className={
+                      entry.direction === "out"
+                        ? "savings-list-amt out"
+                        : "savings-list-amt in"
+                    }
+                  >
+                    {lek(entry.amount)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+            {savingsHistory.length > savingsHistoryLimit && (
+              <button
+                type="button"
+                className="texty savings-more"
+                onClick={() => setSavingsHistoryOpen((value) => !value)}
+              >
+                {savingsHistoryOpen
+                  ? "Show less"
+                  : `Read more (${savingsHistory.length - savingsHistoryLimit})`}
+              </button>
+            )}
+          </>
         )}
       </section>
 
