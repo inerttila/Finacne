@@ -18,6 +18,12 @@ export const hexclaveClientApp = new HexclaveClientApp({
     default: {
       type: "hosted",
     },
+    signIn: { type: "custom", url: "/sign-in", version: 1 },
+    signUp: { type: "custom", url: "/sign-up", version: 1 },
+    afterSignIn: "/",
+    afterSignUp: "/",
+    afterSignOut: "/",
+    home: "/",
   },
 });
 

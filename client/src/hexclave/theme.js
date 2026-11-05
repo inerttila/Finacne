@@ -1,0 +1,25 @@
+/** Net brand colors for Hexclave auth UI (light, cream paper). */
+export const netHexclaveTheme = {
+  radius: "14px",
+  light: {
+    background: "#efe6d6",
+    foreground: "#221e18",
+    card: "#fbf7ef",
+    cardForeground: "#221e18",
+    popover: "#fbf7ef",
+    popoverForeground: "#221e18",
+    primary: "#9c3b2e",
+    primaryForeground: "#fffdf8",
+    secondary: "#221e18",
+    secondaryForeground: "#fffdf8",
+    muted: "#e8dfd0",
+    mutedForeground: "#6f675c",
+    accent: "#e5d9c4",
+    accentForeground: "#221e18",
+    destructive: "#9c3b2e",
+    destructiveForeground: "#fffdf8",
+    border: "rgba(34, 30, 24, 0.18)",
+    input: "rgba(34, 30, 24, 0.18)",
+    ring: "#9c3b2e",
+  },
+};

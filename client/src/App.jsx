@@ -261,8 +261,8 @@ export default function App() {
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [loadId, setLoadId] = useState(0);
   const [welcomeName, setWelcomeName] = useState("");
-  const [pageLoading, setPageLoading] = useState(true);
   const [authBusy, setAuthBusy] = useState(false);
+  const [bootReady, setBootReady] = useState(false);
   const [appTab, setAppTab] = useState("home");
   const [heroPrefs, setHeroPrefs] = useState(() =>
     readHeroPrefs(getStoredUserId()),
@@ -301,13 +301,11 @@ export default function App() {
       setData(null);
       setMonth("");
       setScreen("auth");
-      setPageLoading(false);
       markShowHello();
       return undefined;
     }
 
     let cancelled = false;
-    setPageLoading(true);
     getSession()
       .then((payload) => {
         if (cancelled) return;
@@ -327,14 +325,12 @@ export default function App() {
           setStoredUserId(null);
           setUserId(null);
           setScreen("start");
-          setPageLoading(false);
         }
       })
       .catch((err) => {
         if (!cancelled) {
           setError(err.message);
           setScreen("start");
-          setPageLoading(false);
         }
       });
     return () => {
@@ -345,10 +341,6 @@ export default function App() {
   const dataRef = useRef(data);
   dataRef.current = data;
   const fetchedLoadIdRef = useRef(-1);
-
-  useEffect(() => {
-    if (data) setPageLoading(false);
-  }, [data]);
 
   useEffect(() => {
     // Prefetch while Hello plays so the ledger is ready when it finishes.
@@ -366,14 +358,10 @@ export default function App() {
 
     if (!forceReload && alreadyLoaded) {
       setError("");
-      setPageLoading(false);
       return undefined;
     }
 
     let cancelled = false;
-    // Keep stale rows on screen — only show the top bar when we have nothing yet.
-    // During hello the splash covers the page, so skip the loading bar flash.
-    if (!current && screen === "app") setPageLoading(true);
     getBootstrap(month)
       .then((payload) => {
         if (cancelled) return;
@@ -398,7 +386,6 @@ export default function App() {
         // accurate. Leave it unchanged on cancel so a replacement effect with
         // the same loadId can still fetch when data is missing.
         fetchedLoadIdRef.current = loadId;
-        setPageLoading(false);
       });
     return () => {
       cancelled = true;
@@ -664,14 +651,17 @@ export default function App() {
     };
   }, [screen, openMonthKey]);
 
-  if (screen === "boot" || (screen === "app" && !data && !error)) {
-    return <BootScreen />;
+  if (
+    !bootReady
+    || screen === "boot"
+    || (screen === "app" && !data && !error)
+  ) {
+    return <BootScreen onReady={() => setBootReady(true)} />;
   }
 
   if (screen === "auth") {
     return (
       <div className="page">
-        <LoadingBar active={pageLoading || authBusy} />
         {error && (
           <p className="banner" role="alert">
             {error}
@@ -697,7 +687,6 @@ export default function App() {
   if (screen === "start" || screen === "create") {
     return (
       <div className="page">
-        <LoadingBar active={pageLoading} />
         {error && (
           <p className="banner" role="alert">
             {error}
@@ -719,7 +708,7 @@ export default function App() {
   }
 
   if (!data && !error) {
-    return <BootScreen />;
+    return <BootScreen onReady={() => setBootReady(true)} />;
   }
 
   const canAdd =
@@ -727,7 +716,6 @@ export default function App() {
 
   return (
     <div className="page page-app">
-      <LoadingBar active={pageLoading} />
       <header className="top">
         <div className="top-left">
           {currentUser && (
@@ -1327,27 +1315,53 @@ function CategoryPie({ userId, categories, spent, active, onSelect }) {
   );
 }
 
-function LoadingBar({ active }) {
-  return (
-    <div
-      className={active ? "loading-bar on" : "loading-bar"}
-      role="progressbar"
-      aria-label="Loading"
-      aria-busy={active}
-      aria-hidden={!active}
-    >
-      <span />
-    </div>
-  );
-}
+function BootScreen({ onReady }) {
+  const word = "Net";
+  const [count, setCount] = useState(0);
+  const [fading, setFading] = useState(false);
+  const readySentRef = useRef(false);
+  const onReadyRef = useRef(onReady);
+  onReadyRef.current = onReady;
+  const reduceMotion =
+    typeof window !== "undefined" &&
+    window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
 
-function BootScreen() {
+  useEffect(() => {
+    if (reduceMotion) {
+      setCount(word.length);
+      return undefined;
+    }
+    if (count >= word.length) return undefined;
+    const id = setTimeout(() => setCount((value) => value + 1), 340);
+    return () => clearTimeout(id);
+  }, [count, reduceMotion, word.length]);
+
+  useEffect(() => {
+    if (count < word.length || readySentRef.current) return undefined;
+
+    if (reduceMotion) {
+      readySentRef.current = true;
+      onReadyRef.current?.();
+      return undefined;
+    }
+
+    const hold = setTimeout(() => setFading(true), 700);
+    const done = setTimeout(() => {
+      readySentRef.current = true;
+      onReadyRef.current?.();
+    }, 700 + 1100);
+    return () => {
+      clearTimeout(hold);
+      clearTimeout(done);
+    };
+  }, [count, reduceMotion, word.length]);
+
   return (
-    <div className="boot-screen">
-      <LoadingBar active />
-      <p className="eyebrow boot-eyebrow">Net</p>
-      <p className="boot-title">Opening your ledger</p>
-      <p className="boot-copy">One moment…</p>
+    <div className="boot-screen" aria-busy="true" aria-label="Loading Net">
+      <p className={fading ? "boot-type fading" : "boot-type"}>
+        <span className="boot-type-text">{word.slice(0, count)}</span>
+        {!fading && <span className="boot-cursor" aria-hidden="true" />}
+      </p>
     </div>
   );
 }
@@ -1886,13 +1900,13 @@ function MonthPulse({ data }) {
         </dl>
         <p className="hint">
           {pace.closed
-            ? "The average spreads this month’s spending across every day in it. Fixed payments are left out."
-            : "Safe to spend is what’s left, split across the days still in the month, including today. The average uses only the days that have passed, and leaves out fixed payments."}
+            ? "Average per day this month, not counting fixed payments."
+            : "Safe to spend splits what’s left across the days still ahead. Average ignores fixed payments."}
         </p>
         {previous && (
           <p className="hint">
-            {formatMonth(previous.month)} spent {lek(previous.spent)}.{" "}
-            {formatMonth(data.month)} is at {lek(data.spent)}.
+            {formatMonth(previous.month)} {lek(previous.spent)} →{" "}
+            {formatMonth(data.month)} {lek(data.spent)}.
           </p>
         )}
       </div>
