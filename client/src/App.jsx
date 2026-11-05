@@ -2298,7 +2298,11 @@ function ScanInvoiceModal({ categories, monthKey, onClose, onSaved, onError }) {
         scannerRef.current = scanner;
         await scanner.start(
           { facingMode: "environment" },
-          { fps: 8, qrbox: { width: 240, height: 240 } },
+          {
+            fps: 8,
+            qrbox: { width: 220, height: 220 },
+            aspectRatio: 1,
+          },
           async (decoded) => {
             if (handledRef.current || cancelled) return;
             handledRef.current = true;
@@ -2310,7 +2314,16 @@ function ScanInvoiceModal({ categories, monthKey, onClose, onSaved, onError }) {
             await lookup(decoded);
           },
         );
-        if (!cancelled) setCamError("");
+        if (!cancelled) {
+          setCamError("");
+          try {
+            await scanner.applyVideoConstraints({
+              advanced: [{ zoom: 2 }],
+            });
+          } catch {
+            /* hardware zoom unsupported — CSS crop still zooms the view */
+          }
+        }
       } catch (err) {
         if (!cancelled) {
           setCamError(

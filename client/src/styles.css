@@ -1655,7 +1655,7 @@ button { cursor: pointer; }
 
 .scan-camera {
   width: 100%;
-  min-height: 220px;
+  min-height: 260px;
   overflow: hidden;
   border-radius: 16px;
   background: #1c1915;
@@ -1663,7 +1663,11 @@ button { cursor: pointer; }
 
 .scan-camera video {
   width: 100% !important;
+  height: 100% !important;
+  object-fit: cover;
   border-radius: 16px;
+  transform: scale(1.45);
+  transform-origin: center center;
 }
 
 .scan-paste {
