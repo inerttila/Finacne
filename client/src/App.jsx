@@ -881,7 +881,7 @@ export default function App() {
 
   return (
     <div className="page page-app">
-      <header className="top">
+      <header className={data?.closed ? "top top-past" : "top"}>
         <div className="top-left">
           {currentUser && (
             <UserMenu
@@ -970,7 +970,7 @@ export default function App() {
               </svg>
             </button>
           )}
-          <p className="month-label">
+          <p className="month-label month-label-inline">
             {data
               ? formatMonth(data.month)
               : month
@@ -981,7 +981,7 @@ export default function App() {
           {data?.closed ? (
             <button
               type="button"
-              className="btn"
+              className="btn top-this-month"
               onClick={() => showMonth(data.openMonth)}
             >
               This month
@@ -998,6 +998,21 @@ export default function App() {
             </button>
           )}
         </div>
+
+        {data?.closed && (
+          <div className="top-month-bar">
+            <p className="month-label">
+              {formatMonth(data.month)} · past
+            </p>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => showMonth(data.openMonth)}
+            >
+              This month
+            </button>
+          </div>
+        )}
       </header>
 
       {error && (
