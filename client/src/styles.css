@@ -1623,7 +1623,8 @@ button { cursor: pointer; }
   flex: 0 0 auto;
 }
 
-.category-pie.folded .pie-chevron {
+.category-pie.folded .pie-chevron,
+.categories-fold.folded .pie-chevron {
   transform: rotate(-45deg);
 }
 
@@ -2367,7 +2368,8 @@ button { cursor: pointer; }
     display: inline-block;
   }
 
-  .category-pie.folded .pie-body {
+  .category-pie.folded .pie-body,
+  .categories-fold.folded .categories-fold-body {
     display: none;
   }
 }

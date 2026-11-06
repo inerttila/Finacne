@@ -1094,63 +1094,25 @@ export default function App() {
           <div className="layout">
             <aside className="rail">
               <MonthList data={data} onOpen={showMonth} />
-              <div className="rail-block">
-                <h2>Categories</h2>
-                <p className="hint">
-                  Grouped from the words on each line. Change a row if a guess
-                  is wrong.
-                </p>
-                <div className="cat-list">
-                  {displayCategories
-                    .filter((item) => item.total > 0)
-                    .sort((a, b) => b.total - a.total)
-                    .map((item) => {
-                      const max = Math.max(
-                        ...displayCategories.map(
-                          (categoryItem) => categoryItem.total,
-                        ),
-                        1,
-                      );
-                      const active = category === item.slug;
-                      return (
-                        <button
-                          key={item.slug}
-                          type="button"
-                          className={active ? "cat on" : "cat"}
-                          aria-pressed={active}
-                          onClick={() =>
-                            setCategory(active ? "all" : item.slug)
-                          }
-                        >
-                          <span
-                            className="swatch"
-                            style={{ background: item.color }}
-                          />
-                          <span className="cat-name">
-                            {item.name}
-                            <small>{item.count}</small>
-                          </span>
-                          <span className="cat-amt">
-                            <span className="figure">{lek(item.total)}</span>
-                            {categorySpent > 0 && (
-                              <small>
-                                {shareOf(item.total, categorySpent)}
-                              </small>
-                            )}
-                          </span>
-                          <span className="cat-bar" aria-hidden="true">
-                            <i
-                              style={{
-                                width: `${(item.total / max) * 100}%`,
-                                background: item.color,
-                              }}
-                            />
-                          </span>
-                        </button>
-                      );
-                    })}
-                </div>
-              </div>
+              <CategoryPie
+                userId={userId}
+                categories={displayCategories}
+                spent={categorySpent}
+                active={category}
+                showLegend={false}
+                onSelect={(slug) =>
+                  setCategory((current) => (current === slug ? "all" : slug))
+                }
+              />
+              <CategoriesRail
+                userId={userId}
+                categories={displayCategories}
+                spent={categorySpent}
+                active={category}
+                onSelect={(slug) =>
+                  setCategory((current) => (current === slug ? "all" : slug))
+                }
+              />
 
               {data.people.length > 0 && (
                 <div className="rail-block">
@@ -1410,7 +1372,113 @@ function readPieOpen(userId) {
   return raw === "1";
 }
 
-function CategoryPie({ userId, categories, spent, active, onSelect }) {
+function categoriesOpenStorageKey(userId) {
+  return `finance-categories-open:${userId || "anon"}`;
+}
+
+function readCategoriesOpen(userId) {
+  const raw = localStorage.getItem(categoriesOpenStorageKey(userId));
+  if (raw == null) return true;
+  return raw === "1";
+}
+
+function CategoriesRail({
+  userId,
+  categories,
+  spent,
+  active,
+  onSelect,
+}) {
+  const [open, setOpen] = useState(() => readCategoriesOpen(userId));
+
+  useEffect(() => {
+    setOpen(readCategoriesOpen(userId));
+  }, [userId]);
+
+  const rows = (categories || [])
+    .filter((item) => item.total > 0)
+    .sort((a, b) => b.total - a.total);
+  const max = Math.max(...rows.map((item) => item.total), 1);
+
+  function toggleOpen() {
+    setOpen((prev) => {
+      const next = !prev;
+      localStorage.setItem(categoriesOpenStorageKey(userId), next ? "1" : "0");
+      return next;
+    });
+  }
+
+  return (
+    <div
+      className={
+        open
+          ? "rail-block categories-fold"
+          : "rail-block categories-fold folded"
+      }
+    >
+      <button
+        type="button"
+        className="pie-toggle"
+        aria-expanded={open}
+        aria-controls="categories-fold-body"
+        onClick={toggleOpen}
+      >
+        <h2>Categories</h2>
+        <span className="pie-chevron" aria-hidden="true" />
+      </button>
+      <div className="categories-fold-body" id="categories-fold-body">
+        <p className="hint">
+          Grouped from the words on each line. Change a row if a guess is
+          wrong.
+        </p>
+        <div className="cat-list">
+          {rows.map((item) => {
+            const selected = active === item.slug;
+            return (
+              <button
+                key={item.slug}
+                type="button"
+                className={selected ? "cat on" : "cat"}
+                aria-pressed={selected}
+                onClick={() => onSelect(item.slug)}
+              >
+                <span
+                  className="swatch"
+                  style={{ background: item.color }}
+                />
+                <span className="cat-name">
+                  {item.name}
+                  <small>{item.count}</small>
+                </span>
+                <span className="cat-amt">
+                  <span className="figure">{lek(item.total)}</span>
+                  {spent > 0 && <small>{shareOf(item.total, spent)}</small>}
+                </span>
+                <span className="cat-bar" aria-hidden="true">
+                  <i
+                    style={{
+                      width: `${(item.total / max) * 100}%`,
+                      background: item.color,
+                    }}
+                  />
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CategoryPie({
+  userId,
+  categories,
+  spent,
+  active,
+  onSelect,
+  showLegend = true,
+}) {
   const [open, setOpen] = useState(() => readPieOpen(userId));
 
   useEffect(() => {
@@ -1497,24 +1565,33 @@ function CategoryPie({ userId, categories, spent, active, onSelect }) {
               </text>
             ))}
         </svg>
-        <ul className="pie-legend">
-          {arcs.map((item) => {
-            const selected = active === item.slug;
-            return (
-              <li key={item.slug}>
-                <button
-                  type="button"
-                  className={selected ? "pie-legend-item on" : "pie-legend-item"}
-                  onClick={() => onSelect(item.slug)}
-                >
-                  <span className="swatch" style={{ background: item.color }} />
-                  <span className="pie-legend-name">{item.name}</span>
-                  <span className="pie-legend-pct">{shareOf(item.total, spent)}</span>
-                </button>
-              </li>
-            );
-          })}
-        </ul>
+        {showLegend && (
+          <ul className="pie-legend">
+            {arcs.map((item) => {
+              const selected = active === item.slug;
+              return (
+                <li key={item.slug}>
+                  <button
+                    type="button"
+                    className={
+                      selected ? "pie-legend-item on" : "pie-legend-item"
+                    }
+                    onClick={() => onSelect(item.slug)}
+                  >
+                    <span
+                      className="swatch"
+                      style={{ background: item.color }}
+                    />
+                    <span className="pie-legend-name">{item.name}</span>
+                    <span className="pie-legend-pct">
+                      {shareOf(item.total, spent)}
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        )}
       </div>
     </div>
   );
